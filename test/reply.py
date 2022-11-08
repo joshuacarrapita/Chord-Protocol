@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+
+import subprocess
+import socket
+
+
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+buffer_size = 1024
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('executable')
+    parser.add_argument('--port', default=4711, type=int)
+    args = parser.parse_args()
+
+    try:
+        server = subprocess.Popen([args.executable, str(args.port)])
+        conn = socket.create_connection(('localhost', args.port), timeout=2)
+        conn.send('Request\r\n\r\n'.encode())
+        reply = conn.recv(1024)
+        return EXIT_SUCCESS if len(reply) else EXIT_FAILURE
+    finally:
+        server.kill()
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main())
