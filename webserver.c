@@ -5,12 +5,10 @@
 #define DEFAULT_PORT 80
 #define MAX_BACKLOG 1
 #define BUFFER_SIZE 256
-#define MEM_CHECK(p) if(p==NULL){\
-fprintf(stderr, "Allocation failed near line %d.\n", __LINE__);\
-exit(1);\
-}
-
-
+#define RCV_TIMEOUT_SEC 10
+#define RCV_TIMEOUT_USEC 0
+#define MAX_URL_LENGTH 256
+#define RELATIVE_RESOURCE_PATH "/.."
 
 // Functions
 
