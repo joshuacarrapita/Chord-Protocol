@@ -5,10 +5,8 @@
 #define DEFAULT_PORT 80
 #define MAX_BACKLOG 1
 #define BUFFER_SIZE 256
-#define MEM_CHECK(p) if(p==NULL){\
-fprintf(stderr, "Allocation failed near line %d.\n", __LINE__);\
-exit(1);\
-}
+#define RECV_TIMEOUT_SEC 10
+#define RECV_TIMEOUT_USEC 0
 
 // Global variables
 size_t used = 0;
@@ -64,13 +62,23 @@ int main(int argc, char **argv) {
         int connection = accept(s, (struct sockaddr *) NULL, NULL);
         ASSERT_SUCCESS(connection)
 
+        /*
+         * Sets the connection socket to time out if hasn't received requests for
+         * a certain amount of time.
+         */
+        struct timeval conn_recv_timeout = {
+                conn_recv_timeout.tv_sec = RECV_TIMEOUT_SEC,
+                conn_recv_timeout.tv_usec = RECV_TIMEOUT_USEC
+        };
+        setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, (char*)&conn_recv_timeout, sizeof(conn_recv_timeout));
+
         // Create a memory segment holding a full request that we can save the content
         // first saved in buffer into and then expand when needed
         request_mem = calloc(BUFFER_SIZE, sizeof(char));
         MEM_CHECK(request_mem)
         request_mem_size = BUFFER_SIZE;
 
-        handle_http_connection(connection);
+        while(handle_http_connection(connection));
 
         // Clean up connection socket
         close(connection);
@@ -121,8 +129,8 @@ bool handle_http_connection(int connection) {
         }
     }
 
-    /* http_response *response = handle_http_request(&parsed);
-     * if (response == NULL) return false;
+     http_response *response = handle_http_request(&parsed);
+    /* if (response == NULL) return false;
      * debug_print_response(response);
      */
     free(buffer);
@@ -198,13 +206,15 @@ char *extract_until_empty_line(char *request) {
             request = (char *) calloc(max(remaining, BUFFER_SIZE),
                                       sizeof(request[0]));
             memcpy(request, request_mem + i, remaining);
-            used = remaining;
+            used = used - i;
 
             // Free old buffer and reassign pointers
             free(request_mem);
             request_mem = request;
+            return buffer;
         }
     }
+    return buffer;
 }
 
 // Recognize packages
