@@ -52,7 +52,9 @@ int main(int argc, char** argv) {
     int l = listen(s, MAX_BACKLOG);
     ASSERT_SUCCESS(l)
 
-    // Possibly loops over the connection handling so that a number of connections is handled sequentially
+    /* Possibly loops over the connection handling so that a number of connections is handled sequentially
+     * Not needed according to Tutor on ISIS because we only need to handle one client (= one connection).
+     */
     {
         /* Extracts the first connection request in queue and creates a new connected socket,
          * returns a file descriptor referring to that socket. The newly created socket is not
@@ -61,7 +63,17 @@ int main(int argc, char** argv) {
         int connection = accept(s, (struct sockaddr*) NULL, NULL);
         ASSERT_SUCCESS(connection)
 
-        handle_http_connection(connection);
+        // Set socket_timeout option for connection socket
+        struct timeval socket_timeout = {
+                socket_timeout.tv_sec = RCV_TIMEOUT_SEC,
+                socket_timeout.tv_usec = RCV_TIMEOUT_USEC,
+        };
+        int sopt = setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, (char*) &socket_timeout, sizeof(socket_timeout));
+        ASSERT_SUCCESS(sopt)
+
+
+        // Returns true if connection is to be kept alive
+        while (handle_http_connection(connection));
 
         // Clean up connection socket
         close(connection);
@@ -213,13 +225,12 @@ bool parse_http_header(char* request, http_request* ptr) {
 
 http_response* handle_http_request(http_request* request) {
     debug_print_request(request);
-    http_response* response_ptr= malloc(sizeof(http_response));
+    http_response response;
     switch (request->verb) {
         case GET: {
-            char* resource;
-            http_response response = {.status_code=get_resource(request->url, &resource)};
-            response.body=resource;
-
+            char* resource = NULL;
+            http_response r = {.status_code=get_resource(request->url, &resource)};
+            r.body = resource;
             response = r;
             break;
         }
@@ -339,6 +350,7 @@ bool is_save_char(char c) {
 }
 
 HTTP_VERB verb_str_to_enum(char* str) {
+    if (str == NULL) return -1;
     for (int i = 0; i < sizeof(verb_table) / sizeof(verb_table[0]); i++) {
         if (!strcmp(verb_table[i], str)) {
             return i;
