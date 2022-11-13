@@ -296,7 +296,16 @@ HTTP_VERB verb_str_to_enum(char* str) {
     return -1;
 }
 char* status_code_to_phrase(int status_code){
-
+    switch (status_code) {
+        case 200: return "OK";
+        case 202: return "Accepted";
+        case 204: return "No Content";
+        case 400: return "Bad Request";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        case 501: return "Not Implemented";
+        default: return "Status Code Not Implemented";
+    }
 }
 
 bool request_has_body(HTTP_VERB verb) {
