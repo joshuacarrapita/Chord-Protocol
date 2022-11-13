@@ -1,60 +1,18 @@
-// Includes (necessary)
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-
-// Includes (maybe necessary)
-#include <string.h>
-#include <sys/un.h>
-#include <stdbool.h>
-
 #define DEBUG
+
+#include "webserver.h"
 // Constants
 #define DEFAULT_PORT 80
 #define MAX_BACKLOG 1
-#define ASSERT_SUCCESS(v) if (v<0) exit(1);
 #define BUFFER_SIZE 256
 #define MEM_CHECK(p) if(p==NULL){\
 fprintf(stderr, "Allocation failed near line %d.\n", __LINE__);\
 exit(1);\
 }
 
-typedef struct key_value_pair key_value_pair;
-struct key_value_pair {
-    char* key;
-    char* value;
-    key_value_pair* next;
-};
 
-typedef enum {
-    GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH
-} HTTP_VERB;
-
-typedef struct {
-    HTTP_VERB verb;
-    char* url;
-    char* version;
-    key_value_pair* kv_block;
-    char* body; // optional, NULL if no body
-//    void* free_on_lifetime_end; // to retain and free data source memory only if
-    // http_request struct outlives its data source
-} http_request;
-
-typedef struct {
-    char* version;
-    int status_code;
-    char* phrase;
-    key_value_pair* kv_block;
-    char* body
-} http_response;
 
 // Functions
-bool handle_http_connection(int connection);
-
-HTTP_VERB verb_str_to_enum(char* strtok);
 
 int main(int argc, char** argv) {
 
@@ -116,29 +74,87 @@ int main(int argc, char** argv) {
     return EXIT_SUCCESS;
 }
 
+
+bool handle_http_connection(int connection) {
+
+    char* request = read_until_empty_line(connection);
+    if (request == NULL)
+        return false;
+
+    http_request parsed;
+    if (!parse_http_header(request, &parsed))
+        return false;
+
+    if (request_has_body(parsed.verb)) {
+        // TODO: may not end in empty line, use content length field instead
+        parsed.body = read_until_empty_line(connection);
+    }
+    http_response* response = handle_http_request(&parsed);
+    if (response == NULL)return false;
+    debug_print_response(response);
+    return true;
+}
+
 // returns string with owned memory
-char* read_until_empty_line(int connection);
+char* read_until_empty_line(int connection) {
+    // Create a memory segment holding a full request that we can save the content
+    // first saved in buffer into and then expand when needed
+    char* request = calloc(BUFFER_SIZE, sizeof(char));
+    MEM_CHECK(request)
 
-bool parse_http_header(char* request, http_request* ptr);
+    // Variables to indicate length of request memory and actually used space within request memory
+    size_t size = BUFFER_SIZE;
+    size_t used = 0;
 
-bool request_has_body(HTTP_VERB verb) {
-    const bool lookup[] = {
-            0, 0, 1, 1, 1/* may */, 0, 0, 0, 1
-    };
-    return lookup[verb];
+    // Read from the bytestream into a buffer
+    while (1) { // TODO: implement limit
+
+        // Initiate an 'in between storage' buffer
+        char buffer[BUFFER_SIZE];
+
+        // Reads n bytes into said buffer
+        int n = recv(connection, buffer, BUFFER_SIZE, 0);
+        // Checks if recv has timed out
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return NULL;
+        }
+        ASSERT_SUCCESS(n)
+
+        /* If actually used up space in request memory + size of "to be written" buffer ('n') > than total size of
+         * request memory try to double memory allocated for the request
+         */
+        if (used + n > size) {
+            size *= 2;
+            request = realloc(request, size);
+            MEM_CHECK(request)
+        }
+
+        /* Copies buffer content into the request memory and
+         * adjusts the variable indicating the size of the used memory accordingly
+         */
+        memcpy(request + used, buffer, n);
+        used += n;
+
+        /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
+         */
+//        char* request_end=strstr(request, "\r\n\r\n");
+        if (0 == strncmp(request + used - 4, "\r\n\r\n", 4)) {
+/*
+#ifdef DEBUG
+            if (used < size)
+                request[used] = '\0';
+            else
+                request[size - 1] = '\0';
+            printf("(%zu/%zu):\n%s\n", used, size, request);
+#endif
+ */
+            return request;
+        }
+    }
 }
 
-bool response_has_body(HTTP_VERB verb) {
-    const bool lookup[] = {
-            1, 0, 1, 1/* may */, 1/* may */, 1, 1, 0, 1
-    };
-    return lookup[verb];
-}
 
-http_response* handle_http_request(http_request* request);
 // Recognize packages
-
-
 // true on success false on failure
 bool parse_http_header(char* request, http_request* ptr) {
     http_request parsed = {};
@@ -192,88 +208,6 @@ bool parse_http_header(char* request, http_request* ptr) {
     return true;
 }
 
-char* verb_table[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"};
-#ifdef DEBUG
-#define debug_print_request(request) debug_print_request_func(request)
-#define debug_print_response(response) debug_print_response_func(response)
-
-void debug_print_request_func(http_request* request) {
-    printf("method: %d %s\n", request->verb, verb_table[request->verb]);
-    printf("url: %s\n", request->url);
-    printf("version: %s\n", request->version);
-
-    for (key_value_pair* current = request->kv_block; current != NULL; current = current->next) {
-        printf("key: %s, value: %s\n", current->key, current->value);
-    }
-    if (request->body != NULL)
-        printf("body: %s\n", request->body);
-    else
-        printf("no body\n");
-}
-void debug_print_response_func(http_response* response) {
-    printf("version: %s\n", response->version);
-    printf("status: %d\n", response->status_code);
-
-    for (key_value_pair* current = response->kv_block; current != NULL; current = current->next) {
-        printf("key: %s, value: %s\n", current->key, current->value);
-    }
-    if (response->body != NULL)
-        printf("body: %s\n", response->body);
-    else
-        printf("no body\n");
-}
-#else
-#define debug_print_request(request)
-#endif
-bool is_save_char(char c){
-    return 'A'<=c&&c<='Z'||'a'<=c&&c<='z'||'0'<=c&&c<='9'||c=='_'||c=='-';
-}
-bool url_is_save(char* url){
-    if(!strncmp(url, "/dynamic", 8 /* length of "/dynamic"*/))
-        url+=8;
-    else
-        return false;
-    bool save_sub_path=true;
-    while(*url!='\0'){
-        char c=*url;
-        if(c=='/'){
-            if(save_sub_path)
-                save_sub_path=false;
-            else
-                return false;
-        }
-        else if(is_save_char(c)){
-            save_sub_path=true;
-        }
-        else if (c == '.'){} // ignore
-        else return false;
-    }
-    return save_sub_path;
-}
-int get_static(char* name, char** dest){
-    if(strcmp(name, "foo"))*dest=strdup("Foo");
-    else if(strcmp(name, "bar"))*dest=strdup("Bar");
-    else if(strcmp(name, "baz"))*dest=strdup("Baz");
-    else return 404; // not found
-    return 200; // OK
-}
-int get_resource(char* url, char** dest){
-    // handle simple urls
-    if(url[0]!='/') return 400; // bad request
-    if(url[1]=='\0') {  // GET nothing for "/"
-        *dest=strdup(""); // TODO: find out what to answer to empty GET requests
-        return 200;
-    }
-    // handle static content
-    if(!strncmp(url, "/static/", 8 /* length of "/static/"*/))
-        return get_static(url+8, dest);
-
-    // handle dynamic content
-    if(!url_is_save(url)){
-        return 403; // forbidden
-    }
-    return 501; //TODO implement
-}
 http_response* handle_http_request(http_request* request) {
     debug_print_request(request);
     http_response* response_ptr= malloc(sizeof(http_response));
@@ -283,83 +217,74 @@ http_response* handle_http_request(http_request* request) {
             http_response response = {.status_code=get_resource(request->url, &resource)};
             response.body=resource;
 
-            *response_ptr=response;
-            return response_ptr;
+            response = r;
+            break;
         }
         default: {
-            http_response response = {.status_code=400};
-            *response_ptr=response;
-            return response_ptr;
+            http_response r = {.status_code=400};
+            response = r;
+            break;
         }
     }
+    if(response.phrase==NULL)
+        response.phrase=status_code_to_phrase(response.status_code);
+    if(response.version==NULL)
+        response.version="HTTP/1.1";
+
+    http_response* response_ptr = malloc(sizeof(http_response));
+    return response_ptr;
 }
 
-char* read_until_empty_line(int connection) {
-    // Create a memory segment holding a full request that we can save the content
-    // first saved in buffer into and then expand when needed
-    char* request = calloc(BUFFER_SIZE, sizeof(char));
-    MEM_CHECK(request)
 
-    // Variables to indicate length of request memory and actually used space within request memory
-    size_t size = BUFFER_SIZE;
-    size_t used = 0;
-
-    // Read from the bytestream into a buffer
-    while (1) { // TODO: implement limit
-
-        // Initiate an 'in between storage' buffer
-        char buffer[BUFFER_SIZE];
-
-        // Reads n bytes into said buffer
-        int n = recv(connection, buffer, BUFFER_SIZE, 0);
-        ASSERT_SUCCESS(n)
-
-        /* If actually used up space in request memory + size of "to be written" buffer ('n') > than total size of
-         * request memory try to double memory allocated for the request
-         */
-        if (used + n > size) {
-            size *= 2;
-            request = realloc(request, size);
-            MEM_CHECK(request)
-        }
-
-        /* Copies buffer content into the request memory and
-         * adjusts the variable indicating the size of the used memory accordingly
-         */
-        memcpy(request + used, buffer, n);
-        used += n;
-
-        /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
-         */
-        if (0 == strncmp(request + used - 4, "\r\n\r\n", 4)) {
-/*
-#ifdef DEBUG
-            if (used < size)
-                request[used] = '\0';
-            else
-                request[size - 1] = '\0';
-            printf("(%zu/%zu):\n%s\n", used, size, request);
-#endif
- */
-            return request;
-        }
+int get_resource(char* url, char** dest) {
+    // handle simple urls
+    if (url[0] != '/') return 400; // bad request
+    if (url[1] == '\0') {  // GET nothing for "/"
+        *dest = strdup(""); // TODO: find out what to answer to empty GET requests
+        return 200;
     }
+    // handle static content
+    if (!strncmp(url, "/static/", 8 /* length of "/static/"*/))
+        return get_static(url + 8, dest);
+
+    // handle dynamic content
+    if (!url_is_save(url)) {
+        return 403; // forbidden
+    }
+    return 501; //TODO implement
 }
-bool handle_http_connection(int connection) {
 
-    char* request = read_until_empty_line(connection);
+int get_static(char* name, char** dest) {
+    if (strcmp(name, "foo"))*dest = strdup("Foo");
+    else if (strcmp(name, "bar"))*dest = strdup("Bar");
+    else if (strcmp(name, "baz"))*dest = strdup("Baz");
+    else return 404; // not found
+    return 200; // OK
+}
 
-    http_request parsed;
-    if (!parse_http_header(request, &parsed))
+bool url_is_save(char* url) {
+    if (!strncmp(url, "/dynamic", 8 /* length of "/dynamic"*/))
+        url += 8;
+    else
         return false;
-
-    if (request_has_body(parsed.verb)) {
-        // TODO: may not end in empty line, use content length field instead
-        parsed.body = read_until_empty_line(connection);
+    bool save_sub_path = true;
+    while (*url != '\0') {
+        char c = *url;
+        if (c == '/') {
+            if (save_sub_path)
+                save_sub_path = false;
+            else
+                return false;
+        } else if (is_save_char(c)) {
+            save_sub_path = true;
+        } else if (c == '.') {} // ignore
+        else return false;
     }
-    http_response* response = handle_http_request(&parsed);
-    debug_print_response(response)
-    return
+    return save_sub_path;
+}
+
+bool is_save_char(char c) {
+    return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '_' || c == '-';
 }
 
 HTTP_VERB verb_str_to_enum(char* str) {
@@ -370,3 +295,51 @@ HTTP_VERB verb_str_to_enum(char* str) {
     }
     return -1;
 }
+char* status_code_to_phrase(int status_code){
+
+}
+
+bool request_has_body(HTTP_VERB verb) {
+    const bool lookup[] = {
+            0, 0, 1, 1, 1/* may */, 0, 0, 0, 1
+    };
+    return lookup[verb];
+}
+
+bool response_has_body(HTTP_VERB verb) {
+    const bool lookup[] = {
+            1, 0, 1, 1/* may */, 1/* may */, 1, 1, 0, 1
+    };
+    return lookup[verb];
+}
+
+#ifdef DEBUG
+
+void debug_print_request_func(http_request* request) {
+    printf("method: %d %s\n", request->verb, verb_table[request->verb]);
+    printf("url: %s\n", request->url);
+    printf("version: %s\n", request->version);
+
+    for (key_value_pair* current = request->kv_block; current != NULL; current = current->next) {
+        printf("key: %s, value: %s\n", current->key, current->value);
+    }
+    if (request->body != NULL)
+        printf("body: %s\n\n", request->body);
+    else
+        printf("no body\n\n");
+}
+
+void debug_print_response_func(http_response* response) {
+    printf("version: %s\n", response->version);
+    printf("status: %d\n", response->status_code);
+
+    for (key_value_pair* current = response->kv_block; current != NULL; current = current->next) {
+        printf("key: %s, value: %s\n", current->key, current->value);
+    }
+    if (response->body != NULL)
+        printf("body: %s\n\n", response->body);
+    else
+        printf("no body\n\n");
+}
+
+#endif

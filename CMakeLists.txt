@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.0)
 project (RN-Praxis1)
 set (CMAKE_C_STANDARD 11)
 
-add_executable (webserver webserver.c)
+add_executable (webserver webserver.c webserver.h)
 
 # Do not change beyond this point :)
 # Testing
