@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
     return EXIT_SUCCESS;
 }
 
-
+// TODO: refactor response dispatching into the loop, that is currently inside read_until_empty_line or fix lost requests
 bool handle_http_connection(int connection) {
 
     /*
@@ -180,17 +180,8 @@ char *read_until_empty_line(int connection) {
 
         /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
          */
-//        char* request_end=strstr(request, "\r\n\r\n");
-        if (0 == strncmp(request_mem + used - 4, "\r\n\r\n", 4)) {
-/*
-#ifdef DEBUG
-            if (used < size)
-                request[used] = '\0';
-            else
-                request[size - 1] = '\0';
-            printf("(%zu/%zu):\n%s\n", used, size, request);
-#endif
- */
+        char* request_end=strstr(request_mem, "\r\n\r\n");
+        if (request_end) {
             return request_mem;
         }
     }
@@ -452,6 +443,9 @@ bool response_has_body(HTTP_VERB verb) {
     return lookup[verb];
 }
 
+size_t max(size_t a, size_t b){
+    return a>b?a:b;
+}
 #ifdef DEBUG
 
 void debug_print_request_func(http_request* request) {
