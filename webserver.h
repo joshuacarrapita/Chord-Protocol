@@ -18,7 +18,7 @@
 #include <sys/un.h>
 #include <stdbool.h>
 
-#define ASSERT_SUCCESS(v) if (v<0) exit(1);
+#define ASSERT_SUCCESS(v) if (v<0) {fprintf(stderr, "problem near line %d", __LINE__);exit(1);}
 #define MEM_CHECK(p) if(p==NULL){\
 fprintf(stderr, "Allocation failed near line %d.\n", __LINE__);\
 exit(1);\
@@ -51,7 +51,7 @@ typedef struct {
     int status_code;
     char* phrase;
     key_value_pair* kv_block;
-    char* body
+    char* body;
 } http_response;
 
 // handle connections
@@ -69,10 +69,13 @@ char* extract_until_empty_line(char* request);
 // handle http strings and structs
 bool parse_http_header(char* request, http_request* ptr);
 http_response* handle_http_request(http_request* request);
+char* http_response_to_string(http_response* response);
 
 // resources
 int get_resource(char* url, char** dest);
 int get_static(char* name, char** dest);
+int get_dynamic(char* name, char** dest);
+void absolute_path(char* relative_path, char** dest);
 bool url_is_save(char* url);
 bool is_save_char(char c);
 
