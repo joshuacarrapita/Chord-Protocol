@@ -57,6 +57,14 @@ typedef struct {
 // handle connections
 bool handle_http_connection(int connection);
 char* read_until_empty_line(int connection);
+/**
+ * Takes a char* memory segment 'request' and extracts the beginning string until the first
+ * "CRLF" into a new buffer. Then replaces the global 'request_mem' with a new memory segment
+ * containing the remaining string and frees the old 'request_mem' memory.
+ * @param request
+ * @return A buffer containing the first string including "CRLF" or NULL if there was no "CRLF".
+ */
+char* extract_until_empty_line(char* request);
 
 // handle http strings and structs
 bool parse_http_header(char* request, http_request* ptr);
@@ -73,6 +81,7 @@ HTTP_VERB verb_str_to_enum(char* strtok);
 char* status_code_to_phrase(int status_code);
 bool request_has_body(HTTP_VERB verb);
 bool response_has_body(HTTP_VERB verb);
+size_t max(size_t a,size_t b);
 
 // debug utilities
 #ifdef DEBUG
