@@ -93,20 +93,23 @@ int main(int argc, char **argv) {
 bool handle_http_connection(int connection) {
 
     /*
-     * Read from connection into request_mem but behind already used part if it exists,
-     * return pointer to beginning of request_mem
+     * Tries to read from memory first in case there is still a full request waiting
+     * that can be processed
      */
-    char *request = read_until_empty_line(connection);
-
+    char* request = request_mem;
+    char* buffer = extract_until_empty_line(request);
     /*
-     * Try to find "\r\n\r\n" in request_mem, if found copy it into temporary buffer
-     * and make a new memory with what remained in request_mem, free old request_mem
+     * If there was no full request to process, tries to read from connection receive
+     * then goes on to try and extract a request from the received content.
      */
-    char *buffer = extract_until_empty_line(request);
-    request = request_mem;
-    if (!buffer) {
-        // TODO: Respond 400
-        return false;
+    if (!buffer){
+        request = read_until_empty_line(connection);
+        buffer = extract_until_empty_line(request);
+        request = request_mem;
+        if (!buffer) {
+            // TODO: Respond 400
+            return false;
+        }
     }
 
     http_request parsed;
