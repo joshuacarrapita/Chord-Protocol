@@ -24,4 +24,3 @@ if __name__ == '__main__':
         print("SUCCEED")
     else:
         print("FAILED")
-    sys.exit(code)

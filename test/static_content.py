@@ -1,8 +1,21 @@
 #!/usr/bin/env python3
 
+import contextlib
 import re
 import subprocess
 from http.client import HTTPConnection
+
+
+class KillOnExit(subprocess.Popen):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def __exit__(self, *args):
+        self.kill()
+        super().__exit__(*args)
+
+
+NullContext = contextlib.suppress
 
 
 EXIT_SUCCESS = 0
@@ -13,12 +26,13 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('executable')
     parser.add_argument('--port', default=4711, type=int)
+    exec_group = parser.add_mutually_exclusive_group(required=True)
+    exec_group.add_argument('executable', nargs='?', help="The server to run")
+    exec_group.add_argument('--no-spawn', dest='spawn', default=True, action='store_false', help="Do not spawn the server")
     args = parser.parse_args()
 
-    try:
-        server = subprocess.Popen([args.executable, str(args.port)])
+    with KillOnExit([args.executable, str(args.port)]) if args.spawn else NullContext():
         conn = HTTPConnection('localhost', args.port, timeout=2)
         conn.connect()
 
@@ -34,13 +48,12 @@ def main():
 
         for path in ['/static/other', '/static/anything', '/static/else']:
             conn.request('GET', path)
-            if conn.getresponse().status != 404:
+            reply = conn.getresponse()
+            reply.read()
+            if reply.status != 404:
                 return EXIT_FAILURE
 
         return EXIT_SUCCESS
-
-    finally:
-        server.kill()
 
 
 if __name__ == '__main__':
@@ -50,4 +63,3 @@ if __name__ == '__main__':
         print("SUCCEED")
     else:
         print("FAILED")
-    sys.exit(code)
