@@ -181,10 +181,14 @@ char* read_until_empty_line(int connection) {
 
         /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
          */
-        char* request_end = strstr(request_mem, "\r\n\r\n");
+        /*char* request_end strstr(request_mem, "\r\n\r\n");
         if (request_end) {
             return request_mem;
-        }
+            stringstrinstring\r\n\r\n
+        }*/
+        /*if (0 == strncmp(request_mem + used - 4, "\r\n\r\n", 4)) {
+            return request_mem;
+        }*/
     }
 }
 
