@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os
-
+import random
 
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
