@@ -53,7 +53,7 @@ def main():
             return EXIT_FAILURE
 
         for path in ['/static/other', '/static/anything', '/static/else']:
-        conn.request('GET', path)
+            conn.request('GET', path)
         if conn.getresponse().status != 404:
             return EXIT_FAILURE
 
@@ -65,4 +65,9 @@ def main():
 
 if __name__ == '__main__':
     import sys
-    sys.exit(main())
+    code = main()
+    if code == 0:
+        print("SUCCEED")
+    else:
+        print("FAILED")
+    sys.exit(code)

@@ -26,4 +26,9 @@ def main():
 
 if __name__ == '__main__':
     import sys
-    sys.exit(main())
+    code = main()
+    if code == 0:
+        print("SUCCEED")
+    else:
+        print("FAILED")
+    sys.exit(code)
