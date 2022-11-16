@@ -64,6 +64,15 @@ int main(int argc, char** argv) {
      */
     // TODO: Shut down after a few minutes of no connections?
     while (1){
+
+        // TODO: Checken warum die genulled werden müssen und ob wir das nicht an Stellen vor close(connection) selber machen sollten
+        // NULL global variables
+        used = 0;
+        request_mem = NULL;
+        request_mem_size = 0;
+        conn_state = 0;
+        curr_request = NULL;
+
         /* Extracts the first connection request in queue and creates a new connected socket,
          * returns a file descriptor referring to that socket. The newly created socket is not
          * in the listening state, the original socket is unaffected by this call.
@@ -92,6 +101,7 @@ int main(int argc, char** argv) {
         handle_http_connection(connection);
 
         // Clean up connection socket
+        free(request_mem);
         close(connection);
     }
     // Clean up listening socket
@@ -105,12 +115,15 @@ int handle_http_connection(int connection){
 
         // On SUCCESS or NO_CRLF we receive bytes again in hope of retrieving the next message or full message
         if (conn_state == SUCCESS || conn_state == NO_CRLF) {
-            receive_bytes(connection);
-            conn_state = handle_http_request(connection);
 
-        // If there was a timeout we didn't receive any more bytes and we can assume that the connection can be closed
-        } else if (conn_state == TIMEOUT) {
-            return conn_state;
+            // Tries to process requests that are already inside request_mem first
+            while(handle_http_request(connection) == SUCCESS);
+
+            // Else we try to receive the next bytestream. If nothing is sent we can assume that the connection can be closed
+            if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
+
+            // If we received bytes we can try to handle the received request
+            conn_state = handle_http_request(connection);
 
         // If we had fault while parsing the header or there was no CL-Header the request was incorrect
         } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONT_LEN_HEADER_FAULT) {
@@ -129,9 +142,12 @@ int handle_http_connection(int connection){
         } else if (conn_state == R_GET_FAULT || conn_state == R_STRING_FAULT || conn_state == R_SEND_FAULT) {
             return conn_state;
 
-        // In this case we stil have conn_state many bytes to retrieve for the body of curr_request
+        // In this case we still have conn_state many bytes to retrieve for the body of curr_request
         } else if (conn_state > 0){
-            receive_bytes(connection);
+
+            // We try to receive more bytes for the body. If nothing is sent we can assume that the connection can be closed
+            if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
+
             conn_state = extract_n_from_req_mem(curr_request, conn_state);
         }
     }
