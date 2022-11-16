@@ -33,11 +33,11 @@ struct key_value_pair {
 
 typedef enum {
     GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH
-} HTTP_VERB;
-const char* verb_table[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"};
+} HTTP_METHOD;
+const char* method_table[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"};
 
 typedef struct {
-    HTTP_VERB verb;
+    HTTP_METHOD method;
     char* url;
     char* version;
     key_value_pair* kv_block;
@@ -80,10 +80,10 @@ bool url_is_save(char* url);
 bool is_save_char(char c);
 
 // small helper functions
-HTTP_VERB verb_str_to_enum(char* strtok);
+HTTP_METHOD method_str_to_enum(char* strtok);
 char* status_code_to_phrase(int status_code);
-bool request_has_body(HTTP_VERB verb);
-bool response_has_body(HTTP_VERB verb);
+bool request_has_body(HTTP_METHOD method);
+bool response_has_body(HTTP_METHOD method);
 size_t max(size_t a,size_t b);
 
 // debug utilities

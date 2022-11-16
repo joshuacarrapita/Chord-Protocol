@@ -12,9 +12,9 @@
 
 // Global variables
 size_t used = 0;
-char *request_mem;
+char* request_mem;
 size_t request_mem_size;
-
+// TODO: check with python test
 int main(int argc, char** argv) {
 
     // Assign port
@@ -74,7 +74,8 @@ int main(int argc, char** argv) {
                 conn_recv_timeout.tv_sec = RECV_TIMEOUT_SEC,
                 conn_recv_timeout.tv_usec = RECV_TIMEOUT_USEC
         };
-        int sopt = setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, (char*)&conn_recv_timeout, sizeof(conn_recv_timeout));
+        int sopt = setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, (char*) &conn_recv_timeout,
+                              sizeof(conn_recv_timeout));
         ASSERT_SUCCESS(sopt)
 
         // Create a memory segment holding a full request that we can save the content
@@ -83,7 +84,7 @@ int main(int argc, char** argv) {
         MEM_CHECK(request_mem)
         request_mem_size = BUFFER_SIZE;
 
-        while(handle_http_connection(connection));
+        while (handle_http_connection(connection));
 
         // Clean up connection socket
         close(connection);
@@ -107,7 +108,7 @@ bool handle_http_connection(int connection) {
      * If there was no full request to process, tries to read from connection receive
      * then goes on to try and extract a request from the received content.
      */
-    if (!buffer){
+    if (!buffer) {
         request = read_until_empty_line(connection);
         buffer = extract_until_empty_line(request);
         request = request_mem;
@@ -123,7 +124,7 @@ bool handle_http_connection(int connection) {
         return false;
     }
 
-    if (request_has_body(parsed.verb)) {
+    if (request_has_body(parsed.method)) {
         // TODO: may not end in empty line, use content length field instead
         // TODO: Check if request contains "Content-Length Header", if not return 400 and false
         parsed.body = extract_until_empty_line(request);
@@ -147,7 +148,7 @@ bool handle_http_connection(int connection) {
 }
 
 // returns string with owned memory
-char *read_until_empty_line(int connection) {
+char* read_until_empty_line(int connection) {
 
     // Read from the bytestream into a buffer
     while (1) { // TODO: implement limit
@@ -180,16 +181,20 @@ char *read_until_empty_line(int connection) {
 
         /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
          */
-        char* request_end=strstr(request_mem, "\r\n\r\n");
+        /*char* request_end strstr(request_mem, "\r\n\r\n");
         if (request_end) {
             return request_mem;
-        }
+            stringstrinstring\r\n\r\n
+        }*/
+        /*if (0 == strncmp(request_mem + used - 4, "\r\n\r\n", 4)) {
+            return request_mem;
+        }*/
     }
 }
 
 
-char *extract_until_empty_line(char *request) {
-    char *buffer = NULL;
+char* extract_until_empty_line(char* request) {
+    char* buffer = NULL;
     size_t i = 0;
     while (i <= ((request_mem_size / sizeof(request[0])) - 4)) {
         if ((strncmp(request + i, "\r\n\r\n", 4)) != 0) {
@@ -197,13 +202,13 @@ char *extract_until_empty_line(char *request) {
         } else {
             i = i + 4;
             // Make new buffer and copy content
-            buffer = (char *) calloc(i, sizeof(request[0]));
+            buffer = (char*) calloc(i, sizeof(request[0]));
             memcpy(buffer, request, i * sizeof(request[0]));
 
             // Make new buffer for remaining content and copy it
             size_t remaining = request_mem_size - i * sizeof(request[0]);
-            request = (char *) calloc(max(remaining, BUFFER_SIZE),
-                                      sizeof(request[0]));
+            request = (char*) calloc(max(remaining, BUFFER_SIZE),
+                                     sizeof(request[0]));
             memcpy(request, request_mem + i, remaining);
             used = used - i;
 
@@ -221,9 +226,9 @@ char *extract_until_empty_line(char *request) {
 bool parse_http_header(char* request, http_request* ptr) {
     http_request parsed = {};
     {
-        HTTP_VERB verb = verb_str_to_enum(strtok(request, " "));
-        if (verb == -1) return false;
-        parsed.verb = verb;
+        HTTP_METHOD method = method_str_to_enum(strtok(request, " "));
+        if (method == -1) return false;
+        parsed.method = method;
     }
     {
         char* url = strtok(NULL, " ");
@@ -274,7 +279,7 @@ bool parse_http_header(char* request, http_request* ptr) {
 http_response* handle_http_request(http_request* request) {
     debug_print_request(request);
     http_response response;
-    switch (request->verb) {
+    switch (request->method) {
         case GET: {
             char* resource = NULL;
             http_response r = {.status_code=get_resource(request->url, &resource)};
@@ -282,16 +287,17 @@ http_response* handle_http_request(http_request* request) {
             response = r;
             break;
         }
+        case POST: // TODO: add more
         default: {
             http_response r = {.status_code=400};
             response = r;
             break;
         }
     }
-    if(response.phrase==NULL)
-        response.phrase=status_code_to_phrase(response.status_code);
-    if(response.version==NULL)
-        response.version="HTTP/1.1";
+    if (response.phrase == NULL)
+        response.phrase = status_code_to_phrase(response.status_code);
+    if (response.version == NULL)
+        response.version = "HTTP/1.1";
 
     http_response* response_ptr = malloc(sizeof(http_response));
     *response_ptr = response;
@@ -299,8 +305,9 @@ http_response* handle_http_request(http_request* request) {
 }
 
 char* http_response_to_string(http_response* response) {
-    size_t len = 10000; // TODO: calculate
+    size_t len = 10000; // TODO: calculate size of response
     char* text = calloc(len, 1);
+    // TODO: add key-value-pairs to response text
     if (response->body)
         snprintf(text, len, "%s %d %s\r\n\r\n%s\r\n\r\n", response->version,
                  response->status_code, response->phrase, response->body);
@@ -397,15 +404,16 @@ bool is_save_char(char c) {
     return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '_' || c == '-';
 }
 
-HTTP_VERB verb_str_to_enum(char* str) {
+HTTP_METHOD method_str_to_enum(char* str) {
     if (str == NULL) return -1;
-    for (int i = 0; i < sizeof(verb_table) / sizeof(verb_table[0]); i++) {
-        if (!strcmp(verb_table[i], str)) {
+    for (int i = 0; i < sizeof(method_table) / sizeof(method_table[0]); i++) {
+        if (!strcmp(method_table[i], str)) {
             return i;
         }
     }
     return -1;
 }
+
 char* status_code_to_phrase(int status_code) {
     switch (status_code) {
         case 200:
@@ -429,27 +437,28 @@ char* status_code_to_phrase(int status_code) {
     }
 }
 
-bool request_has_body(HTTP_VERB verb) {
+bool request_has_body(HTTP_METHOD method) {
     const bool lookup[] = {
             0, 0, 1, 1, 1/* may */, 0, 0, 0, 1
     };
-    return lookup[verb];
+    return lookup[method];
 }
 
-bool response_has_body(HTTP_VERB verb) {
+bool response_has_body(HTTP_METHOD method) {
     const bool lookup[] = {
             1, 0, 1, 1/* may */, 1/* may */, 1, 1, 0, 1
     };
-    return lookup[verb];
+    return lookup[method];
 }
 
-size_t max(size_t a, size_t b){
-    return a>b?a:b;
+size_t max(size_t a, size_t b) {
+    return a > b ? a : b;
 }
+
 #ifdef DEBUG
 
 void debug_print_request_func(http_request* request) {
-    printf("method: %d %s\n", request->verb, verb_table[request->verb]);
+    printf("method: %d %s\n", request->method, method_table[request->method]);
     printf("url: %s\n", request->url);
     printf("version: %s\n", request->version);
 
