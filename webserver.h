@@ -36,11 +36,18 @@ typedef enum {
 } HTTP_METHOD;
 const char* method_table[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"};
 
+typedef enum {
+    SUCCESS = 0, NO_CRLF = -1, PARSE_HEADER_FAULT = -2, CONT_LEN_HEADER_FAULT = -3, TIMEOUT = -4,
+    R_GET_FAULT = -5, R_STRING_FAULT = -6, R_SEND_FAULT = -7, BODY_SUCCESS = -8
+} CONNECTION_STATE;
+
 typedef struct {
     HTTP_METHOD method;
     char* url;
     char* version;
     key_value_pair* kv_block;
+    size_t body_size;
+    size_t body_used;
     char* body; // optional, NULL if no body
 //    void* free_on_lifetime_end; // to retain and free data source memory only if
     // http_request struct outlives its data source
@@ -55,8 +62,8 @@ typedef struct {
 } http_response;
 
 // handle connections
-bool handle_http_connection(int connection);
-char* read_until_empty_line(int connection);
+int handle_http_connection(int connection);
+int receive_bytes(int connection);
 /**
  * Takes a char* memory segment 'request' and extracts the beginning string until the first
  * "CRLF" into a new buffer. Then replaces the global 'request_mem' with a new memory segment
@@ -65,11 +72,21 @@ char* read_until_empty_line(int connection);
  * @return A buffer containing the first string including "CRLF" or NULL if there was no "CRLF".
  */
 char* extract_until_empty_line(char* request);
+/**
+ * Extracts n or used bytes of data (whichever is less) from request_mem to request->body and moves the remaining data
+ * in request_mem to the front of the allocated memory.
+ * @param request
+ * @param n
+ * @return The difference between the requested extraction n and the actual amount of extracted bytes, ideally this is 0.
+ */
+int extract_n_from_req_mem(http_request* request, size_t n);
 
 // handle http strings and structs
+int handle_http_request(int connection);
 bool parse_http_header(char* request, http_request* ptr);
-http_response* handle_http_request(http_request* request);
+http_response* get_http_response(http_request* request);
 char* http_response_to_string(http_response* response);
+int respond_to_request(http_request* request, int connection);
 
 // resources
 int get_resource(char* url, char** dest);
@@ -85,6 +102,7 @@ char* status_code_to_phrase(int status_code);
 bool request_has_body(HTTP_METHOD method);
 bool response_has_body(HTTP_METHOD method);
 size_t max(size_t a,size_t b);
+size_t min(size_t a,size_t b);
 
 // debug utilities
 #ifdef DEBUG

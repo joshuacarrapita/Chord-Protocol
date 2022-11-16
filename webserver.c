@@ -14,6 +14,10 @@
 size_t used = 0;
 char* request_mem;
 size_t request_mem_size;
+int conn_state = 0;
+http_request* curr_request;
+
+
 // TODO: check with python test
 int main(int argc, char** argv) {
 
@@ -58,7 +62,8 @@ int main(int argc, char** argv) {
     /* Possibly loops over the connection handling so that a number of connections is handled sequentially
      * Not needed according to Tutor on ISIS because we only need to handle one client (= one connection).
      */
-    {
+    // TODO: Shut down after a few minutes of no connections?
+    while (1){
         /* Extracts the first connection request in queue and creates a new connected socket,
          * returns a file descriptor referring to that socket. The newly created socket is not
          * in the listening state, the original socket is unaffected by this call.
@@ -67,7 +72,7 @@ int main(int argc, char** argv) {
         ASSERT_SUCCESS(connection)
 
         /*
-         * Sets the connection socket to time out if hasn't received requests for
+         * Sets the connection socket to time out if it hasn't received requests for
          * a certain amount of time.
          */
         struct timeval conn_recv_timeout = {
@@ -84,7 +89,7 @@ int main(int argc, char** argv) {
         MEM_CHECK(request_mem)
         request_mem_size = BUFFER_SIZE;
 
-        while (handle_http_connection(connection));
+        handle_http_connection(connection);
 
         // Clean up connection socket
         close(connection);
@@ -95,103 +100,146 @@ int main(int argc, char** argv) {
     return EXIT_SUCCESS;
 }
 
-// TODO: refactor response dispatching into the loop, that is currently inside read_until_empty_line or fix lost requests
-bool handle_http_connection(int connection) {
+int handle_http_connection(int connection){
+    while(1){
 
-    /*
-     * Tries to read from memory first in case there is still a full request waiting
-     * that can be processed
-     */
-    char* request = request_mem;
-    char* buffer = extract_until_empty_line(request);
-    /*
-     * If there was no full request to process, tries to read from connection receive
-     * then goes on to try and extract a request from the received content.
-     */
-    if (!buffer) {
-        request = read_until_empty_line(connection);
-        buffer = extract_until_empty_line(request);
-        request = request_mem;
-        if (!buffer) {
-            // TODO: Respond 400
-            return false;
+        // On SUCCESS or NO_CRLF we receive bytes again in hope of retrieving the next message or full message
+        if (conn_state == SUCCESS || conn_state == NO_CRLF) {
+            receive_bytes(connection);
+            conn_state = handle_http_request(connection);
+
+        // If there was a timeout we didn't receive any more bytes and we can assume that the connection can be closed
+        } else if (conn_state == TIMEOUT) {
+            return conn_state;
+
+        // If we had fault while parsing the header or there was no CL-Header the request was incorrect
+        } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONT_LEN_HEADER_FAULT) {
+            //TODO: Respond 400 Bad Request
+            return conn_state;
+
+        /*
+         * If we were able to successfully fill in the body of an http request even though we couldn't at first
+         * we reflect that in conn_state so the next iteration can take the appropriate next action
+         */
+        } else if (conn_state == BODY_SUCCESS) {
+            conn_state = respond_to_request(curr_request, connection);
+            free(curr_request->body);
+
+        // If we had a response error we can return the error code here
+        } else if (conn_state == R_GET_FAULT || conn_state == R_STRING_FAULT || conn_state == R_SEND_FAULT) {
+            return conn_state;
+
+        // In this case we stil have conn_state many bytes to retrieve for the body of curr_request
+        } else if (conn_state > 0){
+            receive_bytes(connection);
+            conn_state = extract_n_from_req_mem(curr_request, conn_state);
         }
     }
 
+}
+
+// TODO: refactor response dispatching into the loop, that is currently inside receive_bytes or fix lost requests
+int handle_http_request(int connection) {
+
+    /*
+     * Tries to read a http request from memory
+     */
+    char* buffer = extract_until_empty_line(request_mem);
+    if (!buffer) {
+        return NO_CRLF;
+    }
+
+    /*
+     * Tries to parse said request
+     */
     http_request parsed;
     if (!parse_http_header(buffer, &parsed)) {
         free(buffer);
-        return false;
+        return PARSE_HEADER_FAULT;
     }
 
+    /*
+     * Since request has been parsed correctly we will work with it further and need to assign it to the global variable
+     * in order to do that
+     */
+    curr_request = &parsed;
+
+    /*
+     * Tries to get the body if said request should have one
+     */
     if (request_has_body(parsed.method)) {
-        // TODO: may not end in empty line, use content length field instead
-        // TODO: Check if request contains "Content-Length Header", if not return 400 and false
-        parsed.body = extract_until_empty_line(request);
-        if (!parsed.body) {
-            // TODO: Respond 400
-            /* Possibly do something else to handle messages that should contain a body but don't
-             * seem to have one. One option would be to read and try again but how often would we
-             * want to do that.
-             */
-            return false;
+        // TODO: Check if request also contains Content-Length Header if not return 400 and CL_HEADER_FAULT
+        // TODO: Set body_size and body_used according to CL-Header, both of these could be done during the KV parsing step
+        /*
+         * Allocate memory for the body
+         */
+        parsed.body = (char*) calloc(parsed.body_size, sizeof(char));
+        MEM_CHECK(parsed.body)
+        /*
+         * Extract data from request_mem into the body
+         */
+        int x = extract_n_from_req_mem(&parsed, parsed.body_size);
+        if(x > 0){
+            return x;
         }
     }
-    http_response* response = handle_http_request(&parsed);
-    if (response == NULL)return false;
-    debug_print_response(response);
-    char* response_string = http_response_to_string(response);
-    send(connection, response_string, strlen(response_string), 0);
-    free(response_string);
+
+    /*
+     * Handles the response to the request
+     */
+    respond_to_request(&parsed, connection);
+
+    /*
+     * Cleanup
+     */
     free(buffer);
-    return true;
+    free(parsed.body);
+    curr_request = NULL;
+    return SUCCESS;
 }
 
 // returns string with owned memory
-char* read_until_empty_line(int connection) {
+int receive_bytes(int connection) {
 
-    // Read from the bytestream into a buffer
-    while (1) { // TODO: implement limit
+    // Initiate an 'in between storage' buffer
+    char buffer[BUFFER_SIZE];
 
-        // Initiate an 'in between storage' buffer
-        char buffer[BUFFER_SIZE];
-
-        // Reads n bytes into said buffer
-        int n = recv(connection, buffer, BUFFER_SIZE, 0);
-        // Checks if recv has timed out
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            return request_mem;
-        }
-        ASSERT_SUCCESS(n)
-
-        /* If actually used up space in request memory + size of "to be written" buffer ('n') > than total size of
-         * request memory try to double memory allocated for the request
-         */
-        if (used + n > request_mem_size) {
-            request_mem_size *= 2;
-            request_mem = realloc(request_mem, request_mem_size);
-            MEM_CHECK(request_mem)
-        }
-
-        /* Copies buffer content into the request memory and
-         * adjusts the variable indicating the size of the used memory accordingly
-         */
-        memcpy(request_mem + used, buffer, n);
-        used += n;
-
-        /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
-         */
-        /*char* request_end strstr(request_mem, "\r\n\r\n");
-        if (request_end) {
-            return request_mem;
-            stringstrinstring\r\n\r\n
-        }*/
-        /*if (0 == strncmp(request_mem + used - 4, "\r\n\r\n", 4)) {
-            return request_mem;
-        }*/
+    // Reads n bytes into said buffer
+    int n = recv(connection, buffer, BUFFER_SIZE, 0);
+    // Checks if recv has timed out
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return TIMEOUT;
     }
-}
+    ASSERT_SUCCESS(n)
 
+    /* If actually used up space in request memory + size of "to be written" buffer ('n') > than total size of
+     * request memory try to double memory allocated for the request
+     */
+    if (used + n > request_mem_size) {
+        request_mem_size *= 2;
+        request_mem = realloc(request_mem, request_mem_size);
+        MEM_CHECK(request_mem)
+    }
+
+    /* Copies buffer content into the request memory and
+     * adjusts the variable indicating the size of the used memory accordingly
+     */
+    memcpy(request_mem + used, buffer, n);
+    used += n;
+
+    return n;
+    /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
+     */
+    /*char* request_end strstr(request_mem, "\r\n\r\n");
+    if (request_end) {
+        return request_mem;
+        stringstrinstring\r\n\r\n
+    }*/
+    /*if (0 == strncmp(request_mem + used - 4, "\r\n\r\n", 4)) {
+        return request_mem;
+    }*/
+
+}
 
 char* extract_until_empty_line(char* request) {
     char* buffer = NULL;
@@ -207,8 +255,9 @@ char* extract_until_empty_line(char* request) {
 
             // Make new buffer for remaining content and copy it
             size_t remaining = request_mem_size - i * sizeof(request[0]);
-            request = (char*) calloc(max(remaining, BUFFER_SIZE),
-                                     sizeof(request[0]));
+            request_mem_size = max(remaining, BUFFER_SIZE);
+            request = (char*) calloc(request_mem_size,sizeof(request[0]));
+            MEM_CHECK(request)
             memcpy(request, request_mem + i, remaining);
             used = used - i;
 
@@ -221,8 +270,47 @@ char* extract_until_empty_line(char* request) {
     return buffer;
 }
 
-// Recognize packages
-// true on success false on failure
+int extract_n_from_req_mem(http_request* request, size_t n){
+
+    // Makes sure we're not trying to copy more than what is available in request_mem
+    size_t tmp = min(used, n);
+
+    /*
+     * Makes sure the remaining available space in request->body is not too small,
+     * it shouldn't be though as it's initialized with n
+     */
+    //if((request->body_size-request->body_used) > tmp){
+        // Copy more body content into the request body behind already written content
+        memcpy(request->body+request->body_used, request_mem, tmp);
+
+        // Adjust the variables indicating used space both for req_mem_size and request->body
+        request->body_used += tmp;
+
+        size_t remaining = request_mem_size - tmp;
+        request_mem_size = max(remaining, BUFFER_SIZE);
+        char* request_mem_new = (char*) calloc(request_mem_size,sizeof(request[0]));
+        MEM_CHECK(request_mem_new)
+        memcpy(request, request_mem + tmp, remaining);
+        used = used - tmp;
+
+        // Free old buffer and reassign pointers
+        free(request_mem);
+        request_mem = request_mem_new;
+
+        /* Return the difference between what should have been extracted and what was actually extracted, ideally this
+         * value is 0. I know, there is an unsigned long to int narrowing here, if you have a better idea let me know
+         */
+        return n-tmp;
+    /*} else {
+        // Assign more space even though this else branch shouldn't happen, just to be sure though
+        request->body = realloc(request->body, request->body_size*2);
+        MEM_CHECK(request->body)
+        request->body_size += request->body_size;
+        return extract_n_from_req_mem(request, n);
+    }*/
+}
+
+// Recognize packages; true on success false on failure
 bool parse_http_header(char* request, http_request* ptr) {
     http_request parsed = {};
     {
@@ -276,7 +364,27 @@ bool parse_http_header(char* request, http_request* ptr) {
     return true;
 }
 
-http_response* handle_http_request(http_request* request) {
+int respond_to_request(http_request* request, int connection){
+
+    // Get a response struct
+    http_response* response = get_http_response(request);
+    if (response == NULL) return R_GET_FAULT;
+
+    debug_print_response(response);
+
+    // Transform it to string
+    char* response_string = http_response_to_string(response); //TODO: If you want you could implement a R_STRING_FAULT error return
+
+    // Send the response
+    if (send(connection, response_string, strlen(response_string), 0) < 0) return R_SEND_FAULT;
+
+    // Cleanup
+    free(response_string);
+    return SUCCESS;
+
+}
+
+http_response* get_http_response(http_request* request) {
     debug_print_request(request);
     http_response response;
     switch (request->method) {
@@ -453,6 +561,10 @@ bool response_has_body(HTTP_METHOD method) {
 
 size_t max(size_t a, size_t b) {
     return a > b ? a : b;
+}
+
+size_t min(size_t a, size_t b){
+    return a < b ? a : b;
 }
 
 #ifdef DEBUG
