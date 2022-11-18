@@ -92,10 +92,11 @@ int respond_to_request(http_request* request, int connection);
 int get_resource(char* url, char** dest);
 int get_static(char* name, char** dest);
 int get_dynamic(char* name, char** dest);
+int set_dynamic(char* name, char* dest);
+int delete_dynamic(char* name);
 void absolute_path(char* relative_path, char** dest);
 bool url_is_save(char* url);
 bool is_save_char(char c);
-
 // small helper functions
 HTTP_METHOD method_str_to_enum(char* strtok);
 char* status_code_to_phrase(int status_code);

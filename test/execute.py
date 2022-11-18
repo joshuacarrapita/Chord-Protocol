@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os
-
+import random
 
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
@@ -19,4 +19,8 @@ def main():
 
 if __name__ == '__main__':
     import sys
-    sys.exit(main())
+    code = main()
+    if code == 0:
+        print("SUCCEED")
+    else:
+        print("FAILED")
