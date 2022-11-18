@@ -181,14 +181,13 @@ char* read_until_empty_line(int connection) {
 
         /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
          */
-        /*char* request_end strstr(request_mem, "\r\n\r\n");
+        char* request_end = strstr(request_mem, "\r\n\r\n");
         if (request_end) {
             return request_mem;
-            stringstrinstring\r\n\r\n
-        }*/
-        /*if (0 == strncmp(request_mem + used - 4, "\r\n\r\n", 4)) {
+        }
+        if (0 == strncmp(request_mem + used - 4, "\r\n\r\n", 4)) {
             return request_mem;
-        }*/
+        }
     }
 }
 
@@ -287,7 +286,34 @@ http_response* handle_http_request(http_request* request) {
             response = r;
             break;
         }
-        case POST: // TODO: add more
+        case PUT: {
+            if(url_is_save(request->url)) {
+                int status_code = set_dynamic(request->url, request->body);
+                http_response r = {.status_code=status_code};
+                r.body = NULL;
+                response = r;
+                break;
+            }
+            else {
+                http_response r = {.status_code=403};
+                response = r;
+                break;
+            }
+        }
+        case DELETE: {
+            if(url_is_save(request->url)) {
+                int status_code = delete_dynamic(request->url);
+                http_response r = {.status_code=status_code};
+                r.body = NULL;
+                response = r;
+                break;
+            }
+            else {
+                http_response r = {.status_code=403};
+                response = r;
+                break;
+            }
+        }
         default: {
             http_response r = {.status_code=400};
             response = r;
@@ -305,16 +331,28 @@ http_response* handle_http_request(http_request* request) {
 }
 
 char* http_response_to_string(http_response* response) {
-    size_t len = 10000; // TODO: calculate size of response
-    char* text = calloc(len, 1);
+    size_t len;
+
+    // http status codes (i.e. 200, 404) have usually 3 digits
+    int size_status_code = 3;
+
     // TODO: add key-value-pairs to response text
-    if (response->body)
+
+    //char* kv_block = response->kv_block;
+
+    if (response->body) {
+        len = strlen(response->version) + size_status_code + strlen(response->phrase) + strlen(response->body) + 10 + 1;
+        char *text = calloc(len, 1);
         snprintf(text, len, "%s %d %s\r\n\r\n%s\r\n\r\n", response->version,
                  response->status_code, response->phrase, response->body);
-    else
+        return text;
+    } else {
+        len = strlen(response->version) + size_status_code + strlen(response->phrase) + 6 +1;
+        char *text = calloc(len, 1);
         snprintf(text, len, "%s %d %s\r\n\r\n", response->version,
                  response->status_code, response->phrase);
-    return text;
+        return text;
+    }
 }
 
 int get_resource(char* url, char** dest) {
@@ -359,12 +397,12 @@ int get_dynamic(char* name, char** dest) {
     return 200;
 }
 
-int set_dynamic(char* name, char* data) {
+int set_dynamic(char *name, char *data) {
     char path[MAX_URL_LENGTH];
     absolute_path(name, path);
     FILE* file = fopen(path, "w");
     if (file == NULL)
-        return 404;
+        return 500;
     size_t len = strlen(data);
     if (len != fwrite(data, 1, len, file)) {
         fclose(file);
@@ -372,6 +410,16 @@ int set_dynamic(char* name, char* data) {
     }
     fclose(file);
     return 200;
+}
+
+int delete_dynamic(char *name) {
+    char path[MAX_URL_LENGTH];
+    absolute_path(name, path);
+    if (remove(path) == 0) {
+        return 200;
+    } else {
+        return 404;
+    }
 }
 
 void absolute_path(char* relative_path, char** absolut_path) {
