@@ -118,6 +118,7 @@ int handle_http_connection(int connection){
 
             // Tries to process requests that are already inside request_mem first
             while(handle_http_request(connection) == SUCCESS);
+            // TODO: If we exit because of body fault we need do do sth else
 
             // Else we try to receive the next bytestream. If nothing is sent we can assume that the connection can be closed
             if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
@@ -126,7 +127,7 @@ int handle_http_connection(int connection){
             conn_state = handle_http_request(connection);
 
         // If we had fault while parsing the header or there was no CL-Header the request was incorrect
-        } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONT_LEN_HEADER_FAULT) {
+        } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONTENT_LENGTH_KV_FAULT){
             //TODO: Respond 400 Bad Request
             return conn_state;
 
@@ -135,6 +136,7 @@ int handle_http_connection(int connection){
          * we reflect that in conn_state so the next iteration can take the appropriate next action
          */
         } else if (conn_state == BODY_SUCCESS) {
+            //TODO: Body Success is not reached yet
             conn_state = respond_to_request(curr_request, connection);
             free(curr_request->body);
 
@@ -149,6 +151,7 @@ int handle_http_connection(int connection){
             if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
 
             conn_state = extract_n_from_req_mem(curr_request, conn_state);
+            //TODO: Respond body success instead of 0 on success
         }
     }
 
@@ -210,6 +213,7 @@ int handle_http_request(int connection) {
      */
     free(buffer);
     free(parsed.body);
+    // TODO: Free KV pair memory
     curr_request = NULL;
     return SUCCESS;
 }
@@ -304,6 +308,7 @@ int extract_n_from_req_mem(http_request* request, size_t n){
 
         size_t remaining = request_mem_size - tmp;
         request_mem_size = max(remaining, BUFFER_SIZE);
+        // TODO: Use realloc
         char* request_mem_new = (char*) calloc(request_mem_size,sizeof(request[0]));
         MEM_CHECK(request_mem_new)
         memcpy(request, request_mem + tmp, remaining);

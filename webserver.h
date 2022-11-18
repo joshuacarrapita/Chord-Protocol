@@ -37,7 +37,7 @@ typedef enum {
 const char* method_table[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"};
 
 typedef enum {
-    SUCCESS = 0, NO_CRLF = -1, PARSE_HEADER_FAULT = -2, CONT_LEN_HEADER_FAULT = -3, TIMEOUT = -4,
+    SUCCESS = 0, NO_CRLF = -1, PARSE_HEADER_FAULT = -2, CONTENT_LENGTH_KV_FAULT = -3, TIMEOUT = -4,
     R_GET_FAULT = -5, R_STRING_FAULT = -6, R_SEND_FAULT = -7, BODY_SUCCESS = -8
 } CONNECTION_STATE;
 
