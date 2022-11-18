@@ -4,7 +4,6 @@ import contextlib
 import socket
 import subprocess
 import time
-import random
 
 
 class KillOnExit(subprocess.Popen):
@@ -28,7 +27,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', default=random.randint(2000, 65000), type=int)
+    parser.add_argument('--port', default=4711, type=int)
     exec_group = parser.add_mutually_exclusive_group(required=True)
     exec_group.add_argument('executable', nargs='?', help="The server to run")
     exec_group.add_argument('--no-spawn', dest='spawn', default=True, action='store_false', help="Do not spawn the server")
@@ -38,7 +37,9 @@ def main():
         conn = socket.create_connection(('localhost', args.port), timeout=2)
         conn.settimeout(.5)
         conn.send('Request1\r\n\r\n'.encode())
+        time.sleep(.5)
         conn.send('Request\r\n2\r\n'.encode())
+        time.sleep(.5)
         conn.send('\r\n'.encode())
         time.sleep(.5)  # Attempt to gracefuly handle all kinds of multi-packet replies...
         replies = conn.recv(1024).split(b'\r\n\r\n')
@@ -47,8 +48,4 @@ def main():
 
 if __name__ == '__main__':
     import sys
-    code = main()
-    if code == 0:
-        print("SUCCEED")
-    else:
-        print("FAILED")
+    sys.exit(main())

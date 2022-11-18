@@ -5,7 +5,7 @@ import random
 import re
 import subprocess
 from http.client import HTTPConnection
-import random
+
 
 class KillOnExit(subprocess.Popen):
     def __init__(self, *args, **kwargs):
@@ -27,7 +27,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', default=random.randint(2000, 65000), type=int)
+    parser.add_argument('--port', default=4711, type=int)
     exec_group = parser.add_mutually_exclusive_group(required=True)
     exec_group.add_argument('executable', nargs='?', help="The server to run")
     exec_group.add_argument('--no-spawn', dest='spawn', default=True, action='store_false', help="Do not spawn the server")
@@ -40,44 +40,44 @@ def main():
         path = f'/dynamic/{random.randbytes(8).hex()}'
         content = random.randbytes(32).hex().encode()
 
-        # Should not exist yet
-        conn.request('GET', path)
-        if conn.getresponse().status != 404:
-            return EXIT_FAILURE
-
-        # Create should succeed
-        conn.request('PUT', path, content)
-        if conn.getresponse().status not in {200, 202, 204}:
-            return EXIT_FAILURE
-
-        # Content should exist and match
         conn.request('GET', path)
         response = conn.getresponse()
-        if response.status != 200 or response.read() != content:
+        payload = response.read()
+        if response.status != 404:
+            print(f"'{path}' should be missing, but GET was not answered with '404'")
             return EXIT_FAILURE
 
-        # Delete should succeed
-        conn.request('DELETE', path, content)
-        if conn.getresponse().status not in {200, 202, 204}:
+        conn.request('PUT', path, content)
+        response = conn.getresponse()
+        payload = response.read()
+        if response.status not in {200, 202, 204}:
+            print(f"Creation of '{path}' did not yield '201'")
             return EXIT_FAILURE
 
-        # Should not exist anymore
         conn.request('GET', path)
-        if conn.getresponse().status != 404:
+        response = conn.getresponse()
+        payload = response.read()
+        if response.status != 200 or payload != content:
+            print(f"Content of '{path}' does not match what was passed")
             return EXIT_FAILURE
 
-        for path in ['/static/other', '/static/anything', '/static/else']:
-            conn.request('GET', path)
-            if conn.getresponse().status != 404:
-                return EXIT_FAILURE
+        conn.request('DELETE', path, content)
+        response = conn.getresponse()
+        payload = response.read()
+        if response.status not in {200, 202, 204}:
+            print(f"Deletion of '{path}' did not succeed")
+            return EXIT_FAILURE
+
+        conn.request('GET', path)
+        response = conn.getresponse()
+        payload = response.read()
+        if response.status != 404:
+            print(f"'{path}' should be missing")
+            return EXIT_FAILURE
 
         return EXIT_SUCCESS
 
 
 if __name__ == '__main__':
     import sys
-    code = main()
-    if code == 0:
-        print("SUCCEED")
-    else:
-        print("FAILED")
+    sys.exit(main())

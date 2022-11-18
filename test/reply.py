@@ -3,7 +3,6 @@
 import contextlib
 import subprocess
 import socket
-import random
 
 
 class KillOnExit(subprocess.Popen):
@@ -27,7 +26,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', default=random.randint(2000, 65000), type=int)
+    parser.add_argument('--port', default=4711, type=int)
     exec_group = parser.add_mutually_exclusive_group(required=True)
     exec_group.add_argument('executable', nargs='?', help="The server to run")
     exec_group.add_argument('--no-spawn', dest='spawn', default=True, action='store_false', help="Do not spawn the server")
@@ -42,8 +41,4 @@ def main():
 
 if __name__ == '__main__':
     import sys
-    code = main()
-    if code == 0:
-        print("SUCCEED")
-    else:
-        print("FAILED")
+    sys.exit(main())

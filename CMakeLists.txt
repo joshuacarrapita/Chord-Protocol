@@ -2,19 +2,19 @@ cmake_minimum_required (VERSION 3.0)
 project (RN-Praxis1)
 set (CMAKE_C_STANDARD 11)
 
-add_executable (webserver webserver.c webserver.h)
+add_executable (webserver webserver.c)
 
 # Do not change beyond this point :)
 # Testing
 enable_testing ()
-add_test(Execute ${PROJECT_SOURCE_DIR}/test/execute.py ${PROJECT_BINARY_DIR}/solution)
-add_test(Listen ${PROJECT_SOURCE_DIR}/test/listen.py ${PROJECT_BINARY_DIR}/solution)
-add_test(Reply ${PROJECT_SOURCE_DIR}/test/reply.py ${PROJECT_BINARY_DIR}/solution)
-add_test(Packets ${PROJECT_SOURCE_DIR}/test/packets.py ${PROJECT_BINARY_DIR}/solution)
-add_test(HTTPReply ${PROJECT_SOURCE_DIR}/test/httpreply.py ${PROJECT_BINARY_DIR}/solution)
-add_test(HTTPReplies ${PROJECT_SOURCE_DIR}/test/httpreplies.py ${PROJECT_BINARY_DIR}/solution)
-add_test(StaticContent ${PROJECT_SOURCE_DIR}/test/static_content.py ${PROJECT_BINARY_DIR}/solution)
-add_test(DynamicContent ${PROJECT_SOURCE_DIR}/test/dynamic_content.py ${PROJECT_BINARY_DIR}/solution)
+add_test(NAME Execute COMMAND ${PROJECT_SOURCE_DIR}/test/execute.py $<TARGET_FILE:webserver>)
+add_test(NAME Listen COMMAND ${PROJECT_SOURCE_DIR}/test/listen.py $<TARGET_FILE:webserver>)
+add_test(NAME Reply COMMAND ${PROJECT_SOURCE_DIR}/test/reply.py $<TARGET_FILE:webserver>)
+add_test(NAME Packets COMMAND ${PROJECT_SOURCE_DIR}/test/packets.py $<TARGET_FILE:webserver>)
+add_test(NAME HTTPReply COMMAND ${PROJECT_SOURCE_DIR}/test/httpreply.py $<TARGET_FILE:webserver>)
+add_test(NAME HTTPReplies COMMAND ${PROJECT_SOURCE_DIR}/test/httpreplies.py $<TARGET_FILE:webserver>)
+add_test(NAME StaticContent COMMAND ${PROJECT_SOURCE_DIR}/test/static_content.py $<TARGET_FILE:webserver>)
+add_test(NAME DynamicContent COMMAND ${PROJECT_SOURCE_DIR}/test/dynamic_content.py $<TARGET_FILE:webserver>)
 
 # Packaging
 set(CPACK_SOURCE_GENERATOR "TGZ")
