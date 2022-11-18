@@ -189,6 +189,9 @@ int handle_http_request(int connection) {
     if (request_has_body(parsed.method)) {
         // TODO: Check if request also contains Content-Length Header if not return 400 and CL_HEADER_FAULT
         // TODO: Set body_size and body_used according to CL-Header, both of these could be done during the KV parsing step
+        if(parsed.body_size == 0){
+            return CONTENT_LENGTH_KV_FAULT;
+        }
         /*
          * Allocate memory for the body
          */
@@ -379,6 +382,10 @@ bool parse_http_header(char* request, http_request* ptr) {
                 v++;
             } while ((*v) == ' '); // trims extra spaces
             kv->value = v;
+
+            if(strcasecmp(kv->key, "Content-Length") == 0){
+                parsed.body_size= atoi(kv->value);
+            }
         }
         strtok(NULL, "\n");
     }
