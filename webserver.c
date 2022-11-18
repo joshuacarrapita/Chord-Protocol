@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
     // TODO: Shut down after a few minutes of no connections?
     while (1){
 
-        // TODO: Checken warum die genulled werden müssen und ob wir das nicht an Stellen vor close(connection) selber machen sollten
+        // TODO: Check why these variables have to be nulled and whether we shouldn't do that before ourselves
         // NULL global variables
         used = 0;
         request_mem = NULL;
@@ -117,14 +117,22 @@ int handle_http_connection(int connection){
         if (conn_state == SUCCESS || conn_state == NO_CRLF) {
 
             // Tries to process requests that are already inside request_mem first
-            while(handle_http_request(connection) == SUCCESS);
-            // TODO: If we exit because of body fault we need do do sth else
+            while((conn_state = handle_http_request(connection)) == SUCCESS);
 
-            // Else we try to receive the next bytestream. If nothing is sent we can assume that the connection can be closed
-            if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
+            /*
+             * Previous while statement will end with NO_CRLF unless there has been an error processing an http_request or
+             * a body hasn't been fully read, so in any normal case try to read more bytes / the next request .. any other
+             * case we skip this part to handle the error code in the next loop of the while statement
+             */
+            if (conn_state == NO_CRLF){
 
-            // If we received bytes we can try to handle the received request
-            conn_state = handle_http_request(connection);
+                // Else we try to receive the next bytestream. If nothing is sent we can assume that the connection can be closed
+                if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
+
+                // If we received bytes we can try to handle the received request
+                conn_state = handle_http_request(connection);
+
+            }
 
         // If we had fault while parsing the header or there was no CL-Header the request was incorrect
         } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONTENT_LENGTH_KV_FAULT){
@@ -136,7 +144,6 @@ int handle_http_connection(int connection){
          * we reflect that in conn_state so the next iteration can take the appropriate next action
          */
         } else if (conn_state == BODY_SUCCESS) {
-            //TODO: Body Success is not reached yet
             conn_state = respond_to_request(curr_request, connection);
             free(curr_request->body);
 
@@ -151,13 +158,11 @@ int handle_http_connection(int connection){
             if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
 
             conn_state = extract_n_from_req_mem(curr_request, conn_state);
-            //TODO: Respond body success instead of 0 on success
         }
     }
 
 }
 
-// TODO: refactor response dispatching into the loop, that is currently inside receive_bytes or fix lost requests
 int handle_http_request(int connection) {
 
     /*
@@ -187,8 +192,6 @@ int handle_http_request(int connection) {
      * Tries to get the body if said request should have one
      */
     if (request_has_body(parsed.method)) {
-        // TODO: Check if request also contains Content-Length Header if not return 400 and CL_HEADER_FAULT
-        // TODO: Set body_size and body_used according to CL-Header, both of these could be done during the KV parsing step
         if(parsed.body_size == 0){
             return CONTENT_LENGTH_KV_FAULT;
         }
@@ -230,7 +233,7 @@ int receive_bytes(int connection) {
     // Reads n bytes into said buffer
     int n = recv(connection, buffer, BUFFER_SIZE, 0);
     // Checks if recv has timed out
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    if ((n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) || n == 0) {
         return TIMEOUT;
     }
     ASSERT_SUCCESS(n)
@@ -325,6 +328,7 @@ int extract_n_from_req_mem(http_request* request, size_t n){
         /* Return the difference between what should have been extracted and what was actually extracted, ideally this
          * value is 0. I know, there is an unsigned long to int narrowing here, if you have a better idea let me know
          */
+        if(n-tmp == 0) return BODY_SUCCESS;
         return n-tmp;
     /*} else {
         // Assign more space even though this else branch shouldn't happen, just to be sure though
