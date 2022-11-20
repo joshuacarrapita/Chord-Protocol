@@ -118,7 +118,8 @@ int main(int argc, char** argv) {
 }
 
 int handle_http_connection(int connection){
-    while(1){
+    //while(1) // test scheinen zu wollen, dass die connection geschlossen wird, da sie sonst getimeoutet wurden
+    {
 
         // On SUCCESS or NO_CRLF we receive bytes again in hope of retrieving the next message or full message
         if (conn_state == SUCCESS || conn_state == NO_CRLF) {
