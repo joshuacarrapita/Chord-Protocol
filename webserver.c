@@ -5,7 +5,7 @@
 #define DEFAULT_PORT 80
 #define MAX_BACKLOG 1
 #define BUFFER_SIZE 256
-#define RECV_TIMEOUT_SEC 10
+#define RECV_TIMEOUT_SEC 0
 #define RECV_TIMEOUT_USEC 0
 #define MAX_URL_LENGTH 256
 #define RELATIVE_RESOURCE_PATH "/.."
@@ -16,10 +16,17 @@ char* request_mem;
 size_t request_mem_size;
 int conn_state = 0;
 http_request* curr_request;
+dynamic_content *dynamicContent;
 
 
 // TODO: check with python test
 int main(int argc, char** argv) {
+
+    // initialize dynamicContent
+    dynamicContent = calloc(1, sizeof(dynamic_content));
+    dynamicContent->name = NULL;
+    dynamicContent->content = NULL;
+    dynamicContent->next = NULL;
 
     // Assign port
     unsigned short port = DEFAULT_PORT;
@@ -316,6 +323,8 @@ int extract_n_from_req_mem(http_request* request, size_t n){
         size_t remaining = request_mem_size - tmp;
         request_mem_size = max(remaining, BUFFER_SIZE);
         // TODO: Use realloc
+        // Hatte nur SEG FAULTS -- jakob
+        /*
         char* request_mem_new = (char*) calloc(request_mem_size,sizeof(request[0]));
         MEM_CHECK(request_mem_new)
         memcpy(request, request_mem + tmp, remaining);
@@ -324,6 +333,7 @@ int extract_n_from_req_mem(http_request* request, size_t n){
         // Free old buffer and reassign pointers
         free(request_mem);
         request_mem = request_mem_new;
+         */
 
         /* Return the difference between what should have been extracted and what was actually extracted, ideally this
          * value is 0. I know, there is an unsigned long to int narrowing here, if you have a better idea let me know
@@ -360,7 +370,7 @@ bool parse_http_header(char* request, http_request* ptr) {
     }
     {
         char* line;
-        while (line = strtok(NULL, "\r")) {
+        while (line = strtok(NULL, "\r\n")) {
             if (strlen(line) <= 1)
                 break;
             key_value_pair* kv = calloc(1, sizeof(key_value_pair));
@@ -524,37 +534,44 @@ int get_static(char* name, char** dest) {
 }
 
 int get_dynamic(char* name, char** dest) {
-    char path[MAX_URL_LENGTH];
-    absolute_path(name, path);
-    FILE* file = fopen(path, "r");
-    if (file == NULL)
+    dynamic_content *curr = dynamicContent;
+    if(curr->name == NULL) {
         return 404;
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    *dest = malloc(file_size + 2);
-    (*dest)[file_size] = '\0';
-    fread(*dest, file_size, 1, file);
-    fclose(file);
+    }
+    while(strcmp(curr->name, name) != 0) {
+        if(curr->next == NULL) {
+            return 404;
+        }
+        curr = curr->next;
+    }
+    *dest = curr->content;
     return 200;
 }
 
 int set_dynamic(char* name, char* data) {
-    char path[MAX_URL_LENGTH];
-    absolute_path(name, path);
-    FILE* file = fopen(path, "w");
-    if (file == NULL)
-        return 500;
-    size_t len = strlen(data);
-    if (len != fwrite(data, 1, len, file)) {
-        fclose(file);
-        return 500;
+    if(dynamicContent->name == NULL) {
+        dynamicContent->name = calloc(strlen(name), sizeof(char *));
+        strncpy(dynamicContent->name, name, strlen(name)+1);
+        dynamicContent->content = calloc(strlen(data), sizeof(char *));
+        strncpy(dynamicContent->content, data, strlen(data)+1);
     }
-    fclose(file);
+    else {
+        dynamic_content* curr = dynamicContent;
+        while(curr->next != NULL) {
+            curr = curr->next;
+        }
+        dynamic_content *new = calloc(1, sizeof(dynamic_content));
+        new->name = calloc(strlen(name), sizeof(char *));
+        strncpy(new->name, name, strlen(name)+1);
+        new->content = calloc(strlen(data), sizeof(char *));
+        strncpy(new->content, data, strlen(data)+1);
+        new->next = NULL;
+        curr->next = new;
+    }
     return 200;
 }
 
-int delete_dynamic(char *name) {
+int delete_dynamic(char *name) { // TODO: DELETE struct entry
     char path[MAX_URL_LENGTH];
     absolute_path(name, path);
     if (remove(path) == 0) {

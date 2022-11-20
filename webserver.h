@@ -31,6 +31,13 @@ struct key_value_pair {
     key_value_pair* next;
 };
 
+typedef struct dynamic_content dynamic_content;
+struct dynamic_content {
+    char* name;
+    char* content;
+    dynamic_content* next;
+};
+
 typedef enum {
     GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH
 } HTTP_METHOD;
