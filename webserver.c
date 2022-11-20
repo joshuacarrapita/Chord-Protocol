@@ -565,6 +565,7 @@ int delete_dynamic(char *name) {
 }
 
 void absolute_path(char* relative_path, char** absolut_path) {
+    // TODO: Fix warning: passing argument 1 of ‘snprintf’ from incompatible pointer type [-Wincompatible-pointer-types] (absolute_path)
     snprintf(absolut_path, MAX_URL_LENGTH, "%s"RELATIVE_RESOURCE_PATH"%s", getenv("PWD"), relative_path);
 }
 
