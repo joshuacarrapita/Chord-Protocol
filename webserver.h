@@ -111,6 +111,7 @@ bool request_has_body(HTTP_METHOD method);
 bool response_has_body(HTTP_METHOD method);
 size_t max(size_t a,size_t b);
 size_t min(size_t a,size_t b);
+size_t num_to_digits(size_t num);
 
 // debug utilities
 #ifdef DEBUG

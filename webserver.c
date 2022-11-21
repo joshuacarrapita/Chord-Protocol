@@ -494,10 +494,10 @@ char* http_response_to_string(http_response* response) {
     //char* kv_block = response->kv_block;
 
     if (response->body) {
-        len = strlen(response->version) + size_status_code + strlen(response->phrase) + strlen(response->body) + 10 + 1;
+        len = strlen(response->version) + size_status_code + strlen(response->phrase) + num_to_digits(strlen(response->body)) + strlen(response->body) + 24 + 1;
         char *text = calloc(len, 1);
-        snprintf(text, len, "%s %d %s\r\n\r\n%s\r\n\r\n", response->version,
-                 response->status_code, response->phrase, response->body);
+        snprintf(text, len, "%s %d %s\r\nContent-Length: %lu\r\n\r\n%s", response->version,
+                 response->status_code, response->phrase, strlen(response->body),response->body);
         return text;
     } else {
         len = strlen(response->version) + size_status_code + strlen(response->phrase) + 6 +1;
@@ -506,6 +506,15 @@ char* http_response_to_string(http_response* response) {
                  response->status_code, response->phrase);
         return text;
     }
+}
+
+size_t num_to_digits(size_t num) {
+    size_t count = 0;
+    do {
+        num /= 10;
+        ++count;
+    } while(num != 0);
+    return count;
 }
 
 int get_resource(char* url, char** dest) {
