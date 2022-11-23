@@ -16,10 +16,17 @@ char* request_mem;
 size_t request_mem_size;
 int conn_state = 0;
 http_request* curr_request;
+dynamic_content *dynamicContent;
 
 
 // TODO: check with python test
 int main(int argc, char** argv) {
+
+    // initialize dynamicContent
+    dynamicContent = calloc(1, sizeof(dynamic_content));
+    dynamicContent->name = NULL;
+    dynamicContent->content = NULL;
+    dynamicContent->next = NULL;
 
     // Assign port
     unsigned short port = DEFAULT_PORT;
@@ -504,18 +511,27 @@ char* http_response_to_string(http_response* response) {
     //char* kv_block = response->kv_block;
 
     if (response->body) {
-        len = strlen(response->version) + size_status_code + strlen(response->phrase) + strlen(response->body) + 10 + 1;
+        len = strlen(response->version) + size_status_code + strlen(response->phrase) + num_to_digits(strlen(response->body)) + strlen(response->body) + 24 + 1;
         char *text = calloc(len, 1);
-        snprintf(text, len, "%s %d %s\r\n\r\n%s\r\n\r\n", response->version,
-                 response->status_code, response->phrase, response->body);
+        snprintf(text, len, "%s %d %s\r\nContent-Length: %lu\r\n\r\n%s", response->version,
+                 response->status_code, response->phrase, strlen(response->body),response->body);
         return text;
     } else {
-        len = strlen(response->version) + size_status_code + strlen(response->phrase) + 6 +1;
+        len = strlen(response->version) + size_status_code + strlen(response->phrase) + 25 +1;
         char *text = calloc(len, 1);
-        snprintf(text, len, "%s %d %s\r\n\r\n", response->version,
+        snprintf(text, len, "%s %d %s\r\nContent-Length: 0\r\n\r\n", response->version,
                  response->status_code, response->phrase);
         return text;
     }
+}
+
+size_t num_to_digits(size_t num) {
+    size_t count = 0;
+    do {
+        num /= 10;
+        ++count;
+    } while(num != 0);
+    return count;
 }
 
 int get_resource(char* url, char** dest) {
@@ -545,43 +561,65 @@ int get_static(char* name, char** dest) {
 }
 
 int get_dynamic(char* name, char** dest) {
-    char path[MAX_URL_LENGTH];
-    absolute_path(name, path);
-    FILE* file = fopen(path, "r");
-    if (file == NULL)
+    dynamic_content *curr = dynamicContent;
+    if(curr->name == NULL) {
         return 404;
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    *dest = malloc(file_size + 2);
-    (*dest)[file_size] = '\0';
-    fread(*dest, file_size, 1, file);
-    fclose(file);
+    }
+    while(strcmp(curr->name, name) != 0) {
+        if(curr->next == NULL) {
+            return 404;
+        }
+        curr = curr->next;
+    }
+    *dest = curr->content;
     return 200;
 }
 
 int set_dynamic(char* name, char* data) {
-    char path[MAX_URL_LENGTH];
-    absolute_path(name, path);
-    FILE* file = fopen(path, "w");
-    if (file == NULL)
-        return 500;
-    size_t len = strlen(data);
-    if (len != fwrite(data, 1, len, file)) {
-        fclose(file);
-        return 500;
+    if(dynamicContent->name == NULL) {
+        dynamicContent->name = calloc(strlen(name), sizeof(char *));
+        strncpy(dynamicContent->name, name, strlen(name)+1);
+        dynamicContent->content = calloc(strlen(data), sizeof(char *));
+        strncpy(dynamicContent->content, data, strlen(data)+1);
     }
-    fclose(file);
+    else {
+        dynamic_content* curr = dynamicContent;
+        while(curr->next != NULL) {
+            curr = curr->next;
+        }
+        dynamic_content *new = calloc(1, sizeof(dynamic_content));
+        new->name = calloc(strlen(name), sizeof(char *));
+        strncpy(new->name, name, strlen(name)+1);
+        new->content = calloc(strlen(data), sizeof(char *));
+        strncpy(new->content, data, strlen(data)+1);
+        new->next = NULL;
+        curr->next = new;
+    }
     return 200;
 }
 
 int delete_dynamic(char *name) {
-    char path[MAX_URL_LENGTH];
-    absolute_path(name, path);
-    if (remove(path) == 0) {
-        return 200;
-    } else {
-        return 404;
+    if(dynamicContent->name == name) {
+        dynamic_content *next = dynamicContent->next;
+        free(dynamicContent->name);
+        free(dynamicContent->content);
+        free(dynamicContent);
+        dynamicContent = next;
+    }
+    else {
+        dynamic_content* curr = dynamicContent;
+        while(curr->next != NULL && curr->next->name != name) {
+            curr = curr->next;
+        }
+        if(curr->next == NULL) {
+            return 404;
+        }
+        dynamic_content *next = curr->next->next;
+        free(curr->next->name);
+        free(curr->next->content);
+        free(curr->next);
+        curr->next = next;
+
     }
 }
 
