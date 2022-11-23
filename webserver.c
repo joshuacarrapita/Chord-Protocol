@@ -101,6 +101,7 @@ int main(int argc, char** argv) {
         handle_http_connection(connection);
 
         // Clean up connection socket
+        printf("Request memory before connection close: %s.\n", request_mem);
         free(request_mem);
         close(connection);
     }
@@ -112,12 +113,14 @@ int main(int argc, char** argv) {
 
 int handle_http_connection(int connection){
     while(1){
-
+        printf("I'm repeating the while loop. Connection state: %d\n", conn_state);
         // On SUCCESS or NO_CRLF we receive bytes again in hope of retrieving the next message or full message
         if (conn_state == SUCCESS || conn_state == NO_CRLF) {
 
             // Tries to process requests that are already inside request_mem first
+            printf("I'm while handling http requests. Connection state: %d\n", conn_state);
             while((conn_state = handle_http_request(connection)) == SUCCESS);
+            printf("I'm done while handling http requests. Connection state: %d\n", conn_state);
 
             /*
              * Previous while statement will end with NO_CRLF unless there has been an error processing an http_request or
@@ -126,12 +129,16 @@ int handle_http_connection(int connection){
              */
             if (conn_state == NO_CRLF){
 
+                printf("I'm going to receive bytes. Connection state: %d. Connection: %d\n", conn_state, connection);
                 // Else we try to receive the next bytestream. If nothing is sent we can assume that the connection can be closed
                 if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
+                printf("I received the bytes. Connection state: %d. Connection: %d. Request Memory: %s\n", conn_state, connection, request_mem);
+
 
                 // If we received bytes we can try to handle the received request
+                printf("I'm gonna handle a request.\n");
                 conn_state = handle_http_request(connection);
-
+                printf("I handled that request. Connection state: %d\n", conn_state);
             }
 
         // If we had fault while parsing the header or there was no CL-Header the request was incorrect
@@ -160,8 +167,8 @@ int handle_http_connection(int connection){
 
             conn_state = extract_n_from_req_mem(curr_request, conn_state);
         }
+        printf("I'm reaching the end of else if.\n");
     }
-
 }
 
 int handle_http_request(int connection) {
@@ -169,8 +176,12 @@ int handle_http_request(int connection) {
     /*
      * Tries to read a http request from memory
      */
-    char* buffer = extract_until_empty_line(request_mem);
-    if (!buffer) {
+    char** bufferptr = calloc(1, sizeof(char**));
+    MEM_CHECK(bufferptr);
+    *bufferptr = extract_until_empty_line(request_mem);
+    if (!*bufferptr) {
+        free(*bufferptr);
+        free(bufferptr);
         return NO_CRLF;
     }
 
@@ -178,11 +189,11 @@ int handle_http_request(int connection) {
      * Tries to parse said request
      */
     http_request parsed;
-    if (!parse_http_header(buffer, &parsed)) {
-        free(buffer);
+    if (!parse_http_header(*bufferptr, &parsed)) {
+        free(*bufferptr);
+        free(bufferptr);
         return PARSE_HEADER_FAULT;
     }
-
     /*
      * Since request has been parsed correctly we will work with it further and need to assign it to the global variable
      * in order to do that
@@ -194,6 +205,8 @@ int handle_http_request(int connection) {
      */
     if (request_has_body(parsed.method)) {
         if(parsed.body_size == 0){
+            free(*bufferptr);
+            free(bufferptr);
             return CONTENT_LENGTH_KV_FAULT;
         }
         /*
@@ -218,7 +231,8 @@ int handle_http_request(int connection) {
     /*
      * Cleanup
      */
-    free(buffer);
+    free(*bufferptr);
+    free(bufferptr);
     free(parsed.body);
     // TODO: Free KV pair memory
     curr_request = NULL;
@@ -227,14 +241,20 @@ int handle_http_request(int connection) {
 
 // returns string with owned memory
 int receive_bytes(int connection) {
+    printf("I am entering the receive function. Connection state: %d. Connection: %d.\n", conn_state, connection);
 
     // Initiate an 'in between storage' buffer
-    char buffer[BUFFER_SIZE];
+    char* temp = (char *) calloc(BUFFER_SIZE, sizeof(char));
+    MEM_CHECK(temp);
+    printf("I allocated a buffer: %s\n", temp);
 
     // Reads n bytes into said buffer
-    int n = recv(connection, buffer, BUFFER_SIZE, 0);
+    printf("I'm gonna wait in receive.\n");
+    int n = recv(connection, temp, BUFFER_SIZE, 0);
     // Checks if recv has timed out
     if ((n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) || n == 0) {
+        printf("I'm gonna close the connection with n = %d.\n", n);
+        free(temp);
         return TIMEOUT;
     }
     ASSERT_SUCCESS(n)
@@ -251,8 +271,9 @@ int receive_bytes(int connection) {
     /* Copies buffer content into the request memory and
      * adjusts the variable indicating the size of the used memory accordingly
      */
-    memcpy(request_mem + used, buffer, n);
+    memcpy(request_mem + used, temp, n);
     used += n;
+    free(temp);
 
     return n;
     /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
@@ -270,7 +291,6 @@ int receive_bytes(int connection) {
 
 
 char* extract_until_empty_line(char* request) {
-    char* buffer = NULL;
     size_t i = 0;
     while (i <= ((request_mem_size / sizeof(request[0])) - 4)) {
         if ((strncmp(request + i, "\r\n\r\n", 4)) != 0) {
@@ -278,7 +298,7 @@ char* extract_until_empty_line(char* request) {
         } else {
             i = i + 4;
             // Make new buffer and copy content
-            buffer = (char*) calloc(i, sizeof(request[0]));
+            char* buffer = (char*) calloc(i, sizeof(request[0]));
             memcpy(buffer, request, i * sizeof(request[0]));
 
             // Make new buffer for remaining content and copy it
@@ -295,7 +315,7 @@ char* extract_until_empty_line(char* request) {
             return buffer;
         }
     }
-    return buffer;
+    return NULL;
 }
 
 int extract_n_from_req_mem(http_request* request, size_t n){
