@@ -346,7 +346,7 @@ int extract_n_from_req_mem(http_request* request, size_t n){
         // TODO: Use realloc
         char* request_mem_new = (char*) calloc(request_mem_size,sizeof(request[0]));
         MEM_CHECK(request_mem_new)
-        memcpy(request, request_mem + tmp, remaining);
+        memcpy(request_mem_new, request_mem + tmp, remaining);
         used = used - tmp;
 
         // Free old buffer and reassign pointers
@@ -381,8 +381,7 @@ bool parse_http_header(char* request, http_request* ptr) {
         parsed.url = url;
     }
     {
-        char* version = strtok(NULL, "\r");
-        strtok(NULL, "\n");
+        char* version = strtok(NULL, "\r\n");
         if (version == NULL) return false;
         parsed.version = version;
     }
@@ -419,7 +418,7 @@ bool parse_http_header(char* request, http_request* ptr) {
                 parsed.body_size= atoi(kv->value);
             }
         }
-        strtok(NULL, "\n");
+        //strtok(NULL, "\n");
     }
     *ptr = parsed;
     return true;
