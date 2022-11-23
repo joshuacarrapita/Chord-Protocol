@@ -136,7 +136,7 @@ int handle_http_connection(int connection){
 
         // If we had fault while parsing the header or there was no CL-Header the request was incorrect
         } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONTENT_LENGTH_KV_FAULT){
-            //TODO: Respond 400 Bad Request
+            if (send(connection, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 74, 0) < 0) conn_state = R_SEND_FAULT;
             return conn_state;
 
         /*
