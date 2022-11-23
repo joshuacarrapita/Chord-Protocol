@@ -16,17 +16,10 @@ char* request_mem;
 size_t request_mem_size;
 int conn_state = 0;
 http_request* curr_request;
-dynamic_content *dynamicContent;
 
 
 // TODO: check with python test
 int main(int argc, char** argv) {
-
-    // initialize dynamicContent
-    dynamicContent = calloc(1, sizeof(dynamic_content));
-    dynamicContent->name = NULL;
-    dynamicContent->content = NULL;
-    dynamicContent->next = NULL;
 
     // Assign port
     unsigned short port = DEFAULT_PORT;
@@ -108,6 +101,7 @@ int main(int argc, char** argv) {
         handle_http_connection(connection);
 
         // Clean up connection socket
+        printf("Request memory before connection close: %s.\n", request_mem);
         free(request_mem);
         close(connection);
     }
@@ -118,14 +112,15 @@ int main(int argc, char** argv) {
 }
 
 int handle_http_connection(int connection){
-    //while(1) // test scheinen zu wollen, dass die connection geschlossen wird, da sie sonst getimeoutet wurden
-    {
-
+    while(1){
+        printf("I'm repeating the while loop. Connection state: %d\n", conn_state);
         // On SUCCESS or NO_CRLF we receive bytes again in hope of retrieving the next message or full message
         if (conn_state == SUCCESS || conn_state == NO_CRLF) {
 
             // Tries to process requests that are already inside request_mem first
+            printf("I'm while handling http requests. Connection state: %d\n", conn_state);
             while((conn_state = handle_http_request(connection)) == SUCCESS);
+            printf("I'm done while handling http requests. Connection state: %d\n", conn_state);
 
             /*
              * Previous while statement will end with NO_CRLF unless there has been an error processing an http_request or
@@ -134,12 +129,16 @@ int handle_http_connection(int connection){
              */
             if (conn_state == NO_CRLF){
 
+                printf("I'm going to receive bytes. Connection state: %d. Connection: %d\n", conn_state, connection);
                 // Else we try to receive the next bytestream. If nothing is sent we can assume that the connection can be closed
                 if(receive_bytes(connection) == TIMEOUT) return TIMEOUT;
+                printf("I received the bytes. Connection state: %d. Connection: %d. Request Memory: %s\n", conn_state, connection, request_mem);
+
 
                 // If we received bytes we can try to handle the received request
+                printf("I'm gonna handle a request.\n");
                 conn_state = handle_http_request(connection);
-
+                printf("I handled that request. Connection state: %d\n", conn_state);
             }
 
         // If we had fault while parsing the header or there was no CL-Header the request was incorrect
@@ -168,8 +167,8 @@ int handle_http_connection(int connection){
 
             conn_state = extract_n_from_req_mem(curr_request, conn_state);
         }
+        printf("I'm reaching the end of else if.\n");
     }
-
 }
 
 int handle_http_request(int connection) {
@@ -177,8 +176,12 @@ int handle_http_request(int connection) {
     /*
      * Tries to read a http request from memory
      */
-    char* buffer = extract_until_empty_line(request_mem);
-    if (!buffer) {
+    char** bufferptr = calloc(1, sizeof(char**));
+    MEM_CHECK(bufferptr);
+    *bufferptr = extract_until_empty_line(request_mem);
+    if (!*bufferptr) {
+        free(*bufferptr);
+        free(bufferptr);
         return NO_CRLF;
     }
 
@@ -186,11 +189,11 @@ int handle_http_request(int connection) {
      * Tries to parse said request
      */
     http_request parsed;
-    if (!parse_http_header(buffer, &parsed)) {
-        free(buffer);
+    if (!parse_http_header(*bufferptr, &parsed)) {
+        free(*bufferptr);
+        free(bufferptr);
         return PARSE_HEADER_FAULT;
     }
-
     /*
      * Since request has been parsed correctly we will work with it further and need to assign it to the global variable
      * in order to do that
@@ -202,6 +205,8 @@ int handle_http_request(int connection) {
      */
     if (request_has_body(parsed.method)) {
         if(parsed.body_size == 0){
+            free(*bufferptr);
+            free(bufferptr);
             return CONTENT_LENGTH_KV_FAULT;
         }
         /*
@@ -226,7 +231,8 @@ int handle_http_request(int connection) {
     /*
      * Cleanup
      */
-    free(buffer);
+    free(*bufferptr);
+    free(bufferptr);
     free(parsed.body);
     // TODO: Free KV pair memory
     curr_request = NULL;
@@ -235,14 +241,20 @@ int handle_http_request(int connection) {
 
 // returns string with owned memory
 int receive_bytes(int connection) {
+    printf("I am entering the receive function. Connection state: %d. Connection: %d.\n", conn_state, connection);
 
     // Initiate an 'in between storage' buffer
-    char buffer[BUFFER_SIZE];
+    char* temp = (char *) calloc(BUFFER_SIZE, sizeof(char));
+    MEM_CHECK(temp);
+    printf("I allocated a buffer: %s\n", temp);
 
     // Reads n bytes into said buffer
-    int n = recv(connection, buffer, BUFFER_SIZE, 0);
+    printf("I'm gonna wait in receive.\n");
+    int n = recv(connection, temp, BUFFER_SIZE, 0);
     // Checks if recv has timed out
     if ((n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) || n == 0) {
+        printf("I'm gonna close the connection with n = %d.\n", n);
+        free(temp);
         return TIMEOUT;
     }
     ASSERT_SUCCESS(n)
@@ -259,8 +271,9 @@ int receive_bytes(int connection) {
     /* Copies buffer content into the request memory and
      * adjusts the variable indicating the size of the used memory accordingly
      */
-    memcpy(request_mem + used, buffer, n);
+    memcpy(request_mem + used, temp, n);
     used += n;
+    free(temp);
 
     return n;
     /* While 'HTTP' end of message is not reached, keep reading the bytestream of the connection
@@ -278,7 +291,6 @@ int receive_bytes(int connection) {
 
 
 char* extract_until_empty_line(char* request) {
-    char* buffer = NULL;
     size_t i = 0;
     while (i <= ((request_mem_size / sizeof(request[0])) - 4)) {
         if ((strncmp(request + i, "\r\n\r\n", 4)) != 0) {
@@ -286,7 +298,7 @@ char* extract_until_empty_line(char* request) {
         } else {
             i = i + 4;
             // Make new buffer and copy content
-            buffer = (char*) calloc(i, sizeof(request[0]));
+            char* buffer = (char*) calloc(i, sizeof(request[0]));
             memcpy(buffer, request, i * sizeof(request[0]));
 
             // Make new buffer for remaining content and copy it
@@ -303,7 +315,7 @@ char* extract_until_empty_line(char* request) {
             return buffer;
         }
     }
-    return buffer;
+    return NULL;
 }
 
 int extract_n_from_req_mem(http_request* request, size_t n){
@@ -325,8 +337,6 @@ int extract_n_from_req_mem(http_request* request, size_t n){
         size_t remaining = request_mem_size - tmp;
         request_mem_size = max(remaining, BUFFER_SIZE);
         // TODO: Use realloc
-        // Hatte nur SEG FAULTS -- jakob
-        /*
         char* request_mem_new = (char*) calloc(request_mem_size,sizeof(request[0]));
         MEM_CHECK(request_mem_new)
         memcpy(request, request_mem + tmp, remaining);
@@ -335,7 +345,6 @@ int extract_n_from_req_mem(http_request* request, size_t n){
         // Free old buffer and reassign pointers
         free(request_mem);
         request_mem = request_mem_new;
-         */
 
         /* Return the difference between what should have been extracted and what was actually extracted, ideally this
          * value is 0. I know, there is an unsigned long to int narrowing here, if you have a better idea let me know
@@ -372,7 +381,7 @@ bool parse_http_header(char* request, http_request* ptr) {
     }
     {
         char* line;
-        while (line = strtok(NULL, "\r\n")) {
+        while (line = strtok(NULL, "\r")) {
             if (strlen(line) <= 1)
                 break;
             key_value_pair* kv = calloc(1, sizeof(key_value_pair));
@@ -495,10 +504,10 @@ char* http_response_to_string(http_response* response) {
     //char* kv_block = response->kv_block;
 
     if (response->body) {
-        len = strlen(response->version) + size_status_code + strlen(response->phrase) + num_to_digits(strlen(response->body)) + strlen(response->body) + 24 + 1;
+        len = strlen(response->version) + size_status_code + strlen(response->phrase) + strlen(response->body) + 10 + 1;
         char *text = calloc(len, 1);
-        snprintf(text, len, "%s %d %s\r\nContent-Length: %lu\r\n\r\n%s", response->version,
-                 response->status_code, response->phrase, strlen(response->body),response->body);
+        snprintf(text, len, "%s %d %s\r\n\r\n%s\r\n\r\n", response->version,
+                 response->status_code, response->phrase, response->body);
         return text;
     } else {
         len = strlen(response->version) + size_status_code + strlen(response->phrase) + 6 +1;
@@ -507,15 +516,6 @@ char* http_response_to_string(http_response* response) {
                  response->status_code, response->phrase);
         return text;
     }
-}
-
-size_t num_to_digits(size_t num) {
-    size_t count = 0;
-    do {
-        num /= 10;
-        ++count;
-    } while(num != 0);
-    return count;
 }
 
 int get_resource(char* url, char** dest) {
@@ -545,44 +545,37 @@ int get_static(char* name, char** dest) {
 }
 
 int get_dynamic(char* name, char** dest) {
-    dynamic_content *curr = dynamicContent;
-    if(curr->name == NULL) {
+    char path[MAX_URL_LENGTH];
+    absolute_path(name, path);
+    FILE* file = fopen(path, "r");
+    if (file == NULL)
         return 404;
-    }
-    while(strcmp(curr->name, name) != 0) {
-        if(curr->next == NULL) {
-            return 404;
-        }
-        curr = curr->next;
-    }
-    *dest = curr->content;
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    *dest = malloc(file_size + 2);
+    (*dest)[file_size] = '\0';
+    fread(*dest, file_size, 1, file);
+    fclose(file);
     return 200;
 }
 
 int set_dynamic(char* name, char* data) {
-    if(dynamicContent->name == NULL) {
-        dynamicContent->name = calloc(strlen(name), sizeof(char *));
-        strncpy(dynamicContent->name, name, strlen(name)+1);
-        dynamicContent->content = calloc(strlen(data), sizeof(char *));
-        strncpy(dynamicContent->content, data, strlen(data)+1);
+    char path[MAX_URL_LENGTH];
+    absolute_path(name, path);
+    FILE* file = fopen(path, "w");
+    if (file == NULL)
+        return 500;
+    size_t len = strlen(data);
+    if (len != fwrite(data, 1, len, file)) {
+        fclose(file);
+        return 500;
     }
-    else {
-        dynamic_content* curr = dynamicContent;
-        while(curr->next != NULL) {
-            curr = curr->next;
-        }
-        dynamic_content *new = calloc(1, sizeof(dynamic_content));
-        new->name = calloc(strlen(name), sizeof(char *));
-        strncpy(new->name, name, strlen(name)+1);
-        new->content = calloc(strlen(data), sizeof(char *));
-        strncpy(new->content, data, strlen(data)+1);
-        new->next = NULL;
-        curr->next = new;
-    }
+    fclose(file);
     return 200;
 }
 
-int delete_dynamic(char *name) { // TODO: DELETE struct entry
+int delete_dynamic(char *name) {
     char path[MAX_URL_LENGTH];
     absolute_path(name, path);
     if (remove(path) == 0) {
