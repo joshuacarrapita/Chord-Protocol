@@ -5,7 +5,7 @@
 #define DEFAULT_PORT 80
 #define MAX_BACKLOG 1
 #define BUFFER_SIZE 256
-#define RECV_TIMEOUT_SEC 10
+#define RECV_TIMEOUT_SEC 0
 #define RECV_TIMEOUT_USEC 0
 #define MAX_URL_LENGTH 256
 #define RELATIVE_RESOURCE_PATH "/.."
@@ -136,7 +136,8 @@ int handle_http_connection(int connection){
 
         // If we had fault while parsing the header or there was no CL-Header the request was incorrect
         } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONTENT_LENGTH_KV_FAULT){
-            if (send(connection, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 74, 0) < 0) conn_state = R_SEND_FAULT;
+            char response_string[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+            if (send(connection, response_string, strlen(response_string), 0) < 0) conn_state = R_SEND_FAULT;
             return conn_state;
 
         /*
@@ -457,7 +458,7 @@ http_response* get_http_response(http_request* request) {
             }
         }
         default: {
-            http_response r = {.status_code=400};
+            http_response r = {.status_code=501};
             response = r;
             break;
         }
@@ -510,7 +511,7 @@ int get_resource(char* url, char** dest) {
 
     // handle dynamic content
     if (!url_is_save(url)) {
-        return 403; // forbidden
+        return 404; // forbidden
     }
     return get_dynamic(url, dest);
 }
