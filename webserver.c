@@ -516,9 +516,9 @@ char* http_response_to_string(http_response* response) {
                  response->status_code, response->phrase, strlen(response->body),response->body);
         return text;
     } else {
-        len = strlen(response->version) + size_status_code + strlen(response->phrase) + 6 +1;
+        len = strlen(response->version) + size_status_code + strlen(response->phrase) + 25 +1;
         char *text = calloc(len, 1);
-        snprintf(text, len, "%s %d %s\r\n\r\n", response->version,
+        snprintf(text, len, "%s %d %s\r\nContent-Length: 0\r\n\r\n", response->version,
                  response->status_code, response->phrase);
         return text;
     }
@@ -597,13 +597,28 @@ int set_dynamic(char* name, char* data) {
     return 200;
 }
 
-int delete_dynamic(char *name) { // TODO: DELETE struct entry
-    char path[MAX_URL_LENGTH];
-    absolute_path(name, path);
-    if (remove(path) == 0) {
-        return 200;
-    } else {
-        return 404;
+int delete_dynamic(char *name) {
+    if(dynamicContent->name == name) {
+        dynamic_content *next = dynamicContent->next;
+        free(dynamicContent->name);
+        free(dynamicContent->content);
+        free(dynamicContent);
+        dynamicContent = next;
+    }
+    else {
+        dynamic_content* curr = dynamicContent;
+        while(curr->next != NULL && curr->next->name != name) {
+            curr = curr->next;
+        }
+        if(curr->next == NULL) {
+            return 404;
+        }
+        dynamic_content *next = curr->next->next;
+        free(curr->next->name);
+        free(curr->next->content);
+        free(curr->next);
+        curr->next = next;
+
     }
 }
 
