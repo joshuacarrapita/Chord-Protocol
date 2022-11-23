@@ -138,7 +138,7 @@ int handle_http_connection(int connection){
         } else if (conn_state == PARSE_HEADER_FAULT || conn_state == CONTENT_LENGTH_KV_FAULT){
             char response_string[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
             if (send(connection, response_string, strlen(response_string), 0) < 0) conn_state = R_SEND_FAULT;
-            return conn_state;
+            conn_state = SUCCESS;
 
         /*
          * If we were able to successfully fill in the body of an http request even though we couldn't at first
