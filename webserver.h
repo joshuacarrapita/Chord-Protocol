@@ -1,7 +1,3 @@
-//
-// Created by anton on 13.11.22.
-//
-
 #ifndef RN_PRAXIS1_WEBSERVER_H
 #define RN_PRAXIS1_WEBSERVER_H
 // Includes (necessary)
@@ -18,8 +14,8 @@
 #include <sys/un.h>
 #include <stdbool.h>
 
-#define ASSERT_SUCCESS(v) if (v<0) {fprintf(stderr, "problem near line %d", __LINE__);exit(1);}
-#define MEM_CHECK(p) if(p==NULL){\
+#define ASSERT_SUCCESS(v) if ((v)<0) {fprintf(stderr, "problem near line %d", __LINE__);exit(1);}
+#define MEM_CHECK(p) if((p)==NULL){\
 fprintf(stderr, "Allocation failed near line %d.\n", __LINE__);\
 exit(1);\
 }
@@ -55,8 +51,8 @@ typedef struct {
     key_value_pair* kv_block;
     size_t body_size;
     size_t body_used;
-    char* body; // optional, NULL if no body
-//    void* free_on_lifetime_end; // to retain and free data source memory only if
+    char* body; // optional, NULL if request has no body
+    void* free_on_lifetime_end; // to retain and free data source memory only if
     // http_request struct outlives its data source
 } http_request;
 
@@ -101,10 +97,10 @@ int get_static(char* name, char** dest);
 int get_dynamic(char* name, char** dest);
 int set_dynamic(char* name, char* dest);
 int delete_dynamic(char* name);
-void absolute_path(char* relative_path, char** dest);
 bool url_is_save(char* url);
 bool is_save_char(char c);
 // small helper functions
+void free_kv(key_value_pair* kv_pair, bool free_strings);
 HTTP_METHOD method_str_to_enum(char* strtok);
 char* status_code_to_phrase(int status_code);
 bool request_has_body(HTTP_METHOD method);
