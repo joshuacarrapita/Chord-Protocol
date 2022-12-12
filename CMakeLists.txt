@@ -1,20 +1,18 @@
 cmake_minimum_required (VERSION 3.0)
-project (RN-Praxis1)
+project (RN-Praxis2)
 set (CMAKE_C_STANDARD 11)
 
-add_executable (webserver webserver.c)
+# Client
+add_executable(client src/client.c src/packet.c src/util.c)
+target_include_directories(client PRIVATE include)
+set_target_properties(client PROPERTIES OUTPUT_NAME "client")
+target_compile_options (client PRIVATE -Wall -Wextra -Wpedantic)
 
-# Do not change beyond this point :)
-# Testing
-enable_testing ()
-add_test(NAME Execute COMMAND ${PROJECT_SOURCE_DIR}/test/execute.py $<TARGET_FILE:webserver>)
-add_test(NAME Listen COMMAND ${PROJECT_SOURCE_DIR}/test/listen.py $<TARGET_FILE:webserver>)
-add_test(NAME Reply COMMAND ${PROJECT_SOURCE_DIR}/test/reply.py $<TARGET_FILE:webserver>)
-add_test(NAME Packets COMMAND ${PROJECT_SOURCE_DIR}/test/packets.py $<TARGET_FILE:webserver>)
-add_test(NAME HTTPReply COMMAND ${PROJECT_SOURCE_DIR}/test/httpreply.py $<TARGET_FILE:webserver>)
-add_test(NAME HTTPReplies COMMAND ${PROJECT_SOURCE_DIR}/test/httpreplies.py $<TARGET_FILE:webserver>)
-add_test(NAME StaticContent COMMAND ${PROJECT_SOURCE_DIR}/test/static_content.py $<TARGET_FILE:webserver>)
-add_test(NAME DynamicContent COMMAND ${PROJECT_SOURCE_DIR}/test/dynamic_content.py $<TARGET_FILE:webserver>)
+# Peer
+add_executable(peer src/peer.c src/server.c src/packet.c src/util.c src/hash_table.c src/neighbour.c include/neighbour.h include/requests.h src/requests.c)
+target_include_directories(peer PRIVATE include)
+set_target_properties(peer PROPERTIES OUTPUT_NAME "peer")
+target_compile_options (peer PRIVATE -Wall -Wextra -Wpedantic)
 
 # Packaging
 set(CPACK_SOURCE_GENERATOR "TGZ")
