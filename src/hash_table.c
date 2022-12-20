@@ -29,5 +29,7 @@ int htable_delete(htable **ht, const unsigned char *key, size_t key_len) {
 
     struct htable *s;
     HASH_FIND(hh, *ht, key, key_len, s);
+    // TODO: Free?
     HASH_DELETE(hh, *ht, s);
+    return 0;
 }
