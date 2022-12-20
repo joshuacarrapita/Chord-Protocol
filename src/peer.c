@@ -27,6 +27,10 @@ peer *succ = NULL;
  */
 int forward(peer *p, packet *pack) {
     /* TODO IMPLEMENT */
+    // gets called on successor while looking up a responsible node for a data pack / hash_id and current and
+    // successor are not responsible
+    // send packet (pack) (should always be a control pack with lookup flag) to peer (successor) (ip+port given in p)
+    // over websocket so that it can handle the control request
 }
 
 /**
@@ -40,6 +44,11 @@ int forward(peer *p, packet *pack) {
  */
 int proxy_request(server *srv, int csocket, packet *p, peer *n) {
     /* TODO IMPLEMENT */
+    // forward packet (p) (should always be data packet) onto peer (n)
+    // so dass es in handle_packet_data landet
+    // after respnonse of peer send response back to client
+
+    // data pack without flag
     return CB_REMOVE_CLIENT;
 }
 
@@ -51,6 +60,7 @@ int proxy_request(server *srv, int csocket, packet *p, peer *n) {
  */
 int lookup_peer(uint16_t hash_id) {
     /* TODO IMPLEMENT */
+    // sendet PKT_FLAG_LKUP an successor mit hash_id und self (initialer kontakt) als payload
     return 0;
 }
 
@@ -64,6 +74,9 @@ int lookup_peer(uint16_t hash_id) {
  */
 int handle_own_request(server *srv, client *c, packet *p) {
     /* TODO IMPLEMENT */
+    // in hashtable nachschauen (ht)
+    // set delete oder get ausführen
+    // response an client zurückschicken
     return CB_REMOVE_CLIENT;
 }
 
@@ -76,6 +89,8 @@ int handle_own_request(server *srv, client *c, packet *p) {
  */
 int answer_lookup(packet *p, peer *n) {
     /* TODO IMPLEMENT */
+    // schickt PKT_FLAG_RPLY an urspungs peer (in p)
+    // mit peer (n) (ergebnis- aka verantwortlicher peer) als payload
     return CB_REMOVE_CLIENT;
 }
 
@@ -161,9 +176,9 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
  * @return int The callback status
  */
 int handle_packet(server *srv, client *c, packet *p) {
-    if (p->flags & PKT_FLAG_CTRL) {
+    if (p->flags & PKT_FLAG_CTRL) { // Handle a control packet from another peer.
         return handle_packet_ctrl(srv, c, p);
-    } else {
+    } else { // Handle a key request request from a client.
         return handle_packet_data(srv, c, p);
     }
 }
