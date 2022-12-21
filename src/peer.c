@@ -26,11 +26,27 @@ peer *succ = NULL;
  * @return int The status of the sending procedure
  */
 int forward(peer *p, packet *pack) {
-    /* TODO IMPLEMENT */
     // gets called on successor while looking up a responsible node for a data pack / hash_id and current and
     // successor are not responsible
     // send packet (pack) (should always be a control pack with lookup flag) to peer (successor) (ip+port given in p)
     // over websocket so that it can handle the control request
+
+    if (peer_connect(p) == 0) {
+        // socket of peer is n->socket
+
+        // send packet to peer
+        size_t raw_size_peer;
+        unsigned char *raw_pkt_peer = packet_serialize(pack, &raw_size_peer);
+        //packet_free(pack);
+        sendall(p->socket, raw_pkt_peer, raw_size_peer);
+
+        // disconnect from peer
+        peer_disconnect(p);
+        return 0;
+    }
+    else {
+        return -1;
+    }
 }
 
 /**
