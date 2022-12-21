@@ -59,12 +59,34 @@ int forward(peer *p, packet *pack) {
  * @return int The callback status
  */
 int proxy_request(server *srv, int csocket, packet *p, peer *n) {
-    /* TODO IMPLEMENT */
     // forward packet (p) (should always be data packet) onto peer (n)
-    // so dass es in handle_packet_data landet
-    // after respnonse of peer send response back to client
+    // after response of peer send response back to client
 
-    // data pack without flag
+    // connect to peer
+    if (peer_connect(n) == 0) {
+        // socket of peer is n->socket
+
+        // send packet to peer
+        size_t raw_size_peer;
+        unsigned char *raw_pkt_peer = packet_serialize(p, &raw_size_peer);
+        packet_free(p);
+        sendall(n->socket, raw_pkt_peer, raw_size_peer);
+
+        // get response from peer and write in rsp
+        size_t response_len;
+        unsigned char *response = recvall(n->socket, &response_len);
+        packet *rsp = packet_decode(response, response_len);
+        free(response);
+
+        // disconnect from peer
+        peer_disconnect(n);
+
+        // send response of peer to client
+        size_t raw_size_client;
+        unsigned char *raw_pkt_client = packet_serialize(rsp, &raw_size_client);
+        //packet_free(rsp); -> segfault?
+        sendall(csocket, raw_pkt_client, raw_size_client);
+    }
     return CB_REMOVE_CLIENT;
 }
 
