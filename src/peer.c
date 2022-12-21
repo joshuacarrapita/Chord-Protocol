@@ -59,9 +59,32 @@ int proxy_request(server *srv, int csocket, packet *p, peer *n) {
  * @return int The callback status
  */
 int lookup_peer(uint16_t hash_id) {
-    /* TODO IMPLEMENT */
     // sendet PKT_FLAG_LKUP an successor mit hash_id und self (initialer kontakt) als payload
-    return 0;
+
+    if (peer_connect(succ) == 0) {
+        // socket of peer is n->socket
+        packet *packet = packet_new();
+
+        // set lookup and control flag
+        packet->flags = (PKT_FLAG_LKUP) + (PKT_FLAG_CTRL);
+        // set self identifiers in packet
+        packet->hash_id = hash_id;
+        packet->node_id = self->node_id;
+        packet->node_port = self->port;
+        packet->node_ip = peer_get_ip(self);
+
+        // send packet to peer
+        size_t raw_size;
+        unsigned char *raw_pkt = packet_serialize(packet, &raw_size);
+        packet_free(packet);
+        sendall(succ->socket, raw_pkt, raw_size);
+
+        // disconnect from peer
+        peer_disconnect(succ);
+        return 0;
+    } else {
+        return -1;
+    }
 }
 
 /**
@@ -303,8 +326,8 @@ int main(int argc, char **argv) {
 
     // Initialize all chord peers
     self = peer_init(
-        idSelf, hostSelf,
-        portSelf); //  Not really necessary but convenient to store us as a peer
+            idSelf, hostSelf,
+            portSelf); //  Not really necessary but convenient to store us as a peer
     pred = peer_init(idPred, hostPred, portPred); //
 
     succ = peer_init(idSucc, hostSucc, portSucc);
