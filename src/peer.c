@@ -73,10 +73,88 @@ int lookup_peer(uint16_t hash_id) {
  * @return int The callback status
  */
 int handle_own_request(server *srv, client *c, packet *p) {
-    /* TODO IMPLEMENT */
-    // in hashtable nachschauen (ht)
     // set delete oder get ausführen
-    // response an client zurückschicken
+    // in hashtable nachschauen (ht)
+    // response an client zurückschicken (ACK FLAG)
+
+    //TODO: key_len = 0 -> response without ACK flag
+
+
+    //check if p is set get or delete request
+    if (p->flags & PKT_FLAG_SET) {
+        // set flag
+        htable_set(ht, p->key, p->key_len, p->value, p->value_len);
+        packet *return_packet = packet_new();
+
+        // set ACK and get flag
+        return_packet->flags = (PKT_FLAG_GET) + (PKT_FLAG_ACK);
+
+        size_t raw_size;
+        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
+        packet_free(return_packet);
+        sendall(c->socket, raw_pkt, raw_size);
+    } else if (p->flags & PKT_FLAG_GET) {
+        // get flag
+        htable *result = htable_get(ht, p->key, p->key_len);
+
+        packet *return_packet = packet_new();
+
+        if (result == NULL) {
+            // if result is NULL then no ACK flag
+            return_packet->flags = PKT_FLAG_SET;
+        } else {
+            // if result has content then send SET and ACK flag + content
+            return_packet->flags = (PKT_FLAG_SET) + (PKT_FLAG_ACK);
+            return_packet->key = calloc(result->key_len, sizeof(unsigned char));
+            return_packet->key = memcpy(return_packet->key, result->key, result->key_len);
+            return_packet->key_len = result->key_len;
+            return_packet->value = calloc(result->value_len, sizeof(unsigned char));
+            return_packet->value = memcpy(return_packet->value, result->value, result->value_len);
+            return_packet->value_len = result->value_len;
+            // free result
+            free(result->key);
+            free(result->value);
+            free(result);
+        }
+
+        size_t raw_size;
+        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
+        packet_free(return_packet);
+        sendall(c->socket, raw_pkt, raw_size);
+    } else if (p->flags & PKT_FLAG_DEL) {
+        // delete flag
+
+        // delete key
+        int status = htable_delete(ht, p->key, p->key_len);
+
+        htable_set(ht, p->key, p->key_len, p->value, p->value_len);
+        packet *return_packet = packet_new();
+
+        if (status == 0) {
+            // if delete succeeded send DEL and ACK flag
+            return_packet->flags = (PKT_FLAG_DEL) + (PKT_FLAG_ACK);
+        } else {
+            // send only DEL flag if not succeeded
+            return_packet->flags = PKT_FLAG_DEL;
+        }
+
+        size_t raw_size;
+        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
+        packet_free(return_packet);
+        sendall(c->socket, raw_pkt, raw_size);
+    } else {
+        // sollte nicht eintreten
+        htable_set(ht, p->key, p->key_len, p->value, p->value_len);
+        packet *return_packet = packet_new();
+
+        // set no flag
+        return_packet->flags = 0;
+
+        size_t raw_size;
+        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
+        packet_free(return_packet);
+        sendall(c->socket, raw_pkt, raw_size);
+    }
     return CB_REMOVE_CLIENT;
 }
 
