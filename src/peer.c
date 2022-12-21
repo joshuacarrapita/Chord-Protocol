@@ -87,7 +87,7 @@ int handle_own_request(server *srv, client *c, packet *p) {
         packet *return_packet = packet_new();
 
         // set ACK and get flag
-        return_packet->flags = (PKT_FLAG_GET) + (PKT_FLAG_ACK);
+        return_packet->flags = (PKT_FLAG_SET) + (PKT_FLAG_ACK);
 
         size_t raw_size;
         unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
@@ -101,10 +101,10 @@ int handle_own_request(server *srv, client *c, packet *p) {
 
         if (result == NULL) {
             // if result is NULL then no ACK flag
-            return_packet->flags = PKT_FLAG_SET;
+            return_packet->flags = PKT_FLAG_GET;
         } else {
             // if result has content then send SET and ACK flag + content
-            return_packet->flags = (PKT_FLAG_SET) + (PKT_FLAG_ACK);
+            return_packet->flags = (PKT_FLAG_GET) + (PKT_FLAG_ACK);
             return_packet->key = calloc(result->key_len, sizeof(unsigned char));
             return_packet->key = memcpy(return_packet->key, result->key, result->key_len);
             return_packet->key_len = result->key_len;
