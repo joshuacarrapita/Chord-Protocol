@@ -167,8 +167,33 @@ int handle_own_request(server *srv, client *c, packet *p) {
  */
 int answer_lookup(packet *p, peer *n) {
     /* TODO IMPLEMENT */
-    // schickt PKT_FLAG_RPLY an urspungs peer (in p)
+    // schickt PKT_FLAG_RPLY an urspungs peer (in p: peer)
     // mit peer (n) (ergebnis- aka verantwortlicher peer) als payload
+
+    // get peer from packet
+    peer *origin = peer_from_packet(p);
+
+    // connect to peer
+    if (peer_connect(origin) == 0) {
+        // create return packet
+        packet *ret_packet = packet_new();
+
+        // set RPLY and Control flag
+        ret_packet->flags = (PKT_FLAG_RPLY) + (PKT_FLAG_CTRL);
+        ret_packet->hash_id = p->hash_id;
+        ret_packet->node_id = n->node_id;
+        ret_packet->node_port = n->port;
+        ret_packet->node_ip = peer_get_ip(n);
+
+        // send packet to peer
+        size_t raw_size;
+        unsigned char *raw_pkt = packet_serialize(ret_packet, &raw_size);
+        packet_free(ret_packet);
+        sendall(origin->socket, raw_pkt, raw_size);
+
+        // disconnect from peer
+        peer_disconnect(origin);
+    }
     return CB_REMOVE_CLIENT;
 }
 
@@ -303,8 +328,8 @@ int main(int argc, char **argv) {
 
     // Initialize all chord peers
     self = peer_init(
-        idSelf, hostSelf,
-        portSelf); //  Not really necessary but convenient to store us as a peer
+            idSelf, hostSelf,
+            portSelf); //  Not really necessary but convenient to store us as a peer
     pred = peer_init(idPred, hostPred, portPred); //
 
     succ = peer_init(idSucc, hostSucc, portSucc);
