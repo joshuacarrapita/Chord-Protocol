@@ -87,6 +87,9 @@ int proxy_request(server *srv, int csocket, packet *p, peer *n) {
         //packet_free(rsp); -> segfault?
         sendall(csocket, raw_pkt_client, raw_size_client);
     }
+
+    // close socket of client
+    server_close_socket(srv, csocket);
     return CB_REMOVE_CLIENT;
 }
 
@@ -191,6 +194,7 @@ int handle_own_request(server *srv, client *c, packet *p) {
     packet_free(return_packet);
     sendall(c->socket, raw_pkt, raw_size);
 
+    server_close_socket(srv, c->socket);
     return CB_REMOVE_CLIENT;
 }
 
@@ -296,7 +300,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
              r = r->next) {
             proxy_request(srv, r->socket, r->packet, n);
-            server_close_socket(srv, r->socket);
+            // server_close_socket(srv, r->socket);
         }
         clear_requests(rt, p->hash_id);
     } else {
