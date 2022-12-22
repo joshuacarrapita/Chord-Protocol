@@ -138,27 +138,18 @@ int handle_own_request(server *srv, client *c, packet *p) {
     // in hashtable nachschauen (ht)
     // response an client zurückschicken (ACK FLAG)
 
-    //TODO: key_len = 0 -> response without ACK flag
-
+    packet *return_packet = packet_new();
 
     //check if p is set get or delete request
     if (p->flags & PKT_FLAG_SET) {
         // set flag
         htable_set(ht, p->key, p->key_len, p->value, p->value_len);
-        packet *return_packet = packet_new();
 
         // set ACK and get flag
         return_packet->flags = (PKT_FLAG_SET) + (PKT_FLAG_ACK);
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     } else if (p->flags & PKT_FLAG_GET) {
         // get flag
         htable *result = htable_get(ht, p->key, p->key_len);
-
-        packet *return_packet = packet_new();
 
         if (result == NULL) {
             // if result is NULL then no ACK flag
@@ -173,11 +164,6 @@ int handle_own_request(server *srv, client *c, packet *p) {
             return_packet->value = memcpy(return_packet->value, result->value, result->value_len);
             return_packet->value_len = result->value_len;
         }
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     } else if (p->flags & PKT_FLAG_DEL) {
         // delete flag
 
@@ -185,8 +171,6 @@ int handle_own_request(server *srv, client *c, packet *p) {
         int status = htable_delete(ht, p->key, p->key_len);
 
         htable_set(ht, p->key, p->key_len, p->value, p->value_len);
-        packet *return_packet = packet_new();
-
         if (status == 0) {
             // if delete succeeded send DEL and ACK flag
             return_packet->flags = (PKT_FLAG_DEL) + (PKT_FLAG_ACK);
@@ -194,24 +178,19 @@ int handle_own_request(server *srv, client *c, packet *p) {
             // send only DEL flag if not succeeded
             return_packet->flags = PKT_FLAG_DEL;
         }
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     } else {
         // sollte nicht eintreten
         htable_set(ht, p->key, p->key_len, p->value, p->value_len);
-        packet *return_packet = packet_new();
 
         // set no flag
         return_packet->flags = 0;
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     }
+
+    size_t raw_size;
+    unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
+    packet_free(return_packet);
+    sendall(c->socket, raw_pkt, raw_size);
+
     return CB_REMOVE_CLIENT;
 }
 
