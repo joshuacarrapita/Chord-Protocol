@@ -172,10 +172,10 @@ int handle_own_request(server *srv, client *c, packet *p) {
             return_packet->value = calloc(result->value_len, sizeof(unsigned char));
             return_packet->value = memcpy(return_packet->value, result->value, result->value_len);
             return_packet->value_len = result->value_len;
-            // free result
+            /*free result
             free(result->key);
             free(result->value);
-            free(result);
+            free(result);*/
         }
 
         size_t raw_size;
