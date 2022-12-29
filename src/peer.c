@@ -300,7 +300,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
              r = r->next) {
             proxy_request(srv, r->socket, r->packet, n);
-            // server_close_socket(srv, r->socket);
+            server_close_socket(srv, r->socket);
         }
         clear_requests(rt, p->hash_id);
     } else {
