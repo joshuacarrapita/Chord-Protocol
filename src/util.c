@@ -28,7 +28,6 @@ int sendall(int s, unsigned char *buffer, size_t buf_size) {
         }
         sent += n;
     }
-    free(buffer);
     return 0;
 }
 

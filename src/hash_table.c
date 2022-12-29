@@ -2,7 +2,6 @@
 
 void htable_set(htable **ht, const unsigned char *key, size_t key_len,
                 const unsigned char *value, size_t value_len) {
-    htable_delete(ht, key, key_len);
     // tmp struct
     htable *s = (struct htable *) calloc(1, sizeof(htable));
     // write key and key_len
@@ -32,6 +31,5 @@ int htable_delete(htable **ht, const unsigned char *key, size_t key_len) {
     free(s->key);
     free(s->value);
     HASH_DELETE(hh, *ht, s);
-    free(s);
     return 0;
 }
