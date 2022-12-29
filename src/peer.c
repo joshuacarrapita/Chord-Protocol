@@ -389,4 +389,5 @@ int main(int argc, char **argv) {
     srv->packet_cb = handle_packet;
     server_run(srv);
     close(srv->socket);
+    free(srv);
 }
