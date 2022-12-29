@@ -206,7 +206,6 @@ int handle_own_request(server *srv, client *c, packet *p) {
  * @return int The callback status
  */
 int answer_lookup(packet *p, peer *n) {
-    /* TODO IMPLEMENT */
     // schickt PKT_FLAG_RPLY an urspungs peer (in p: peer)
     // mit peer (n) (ergebnis- aka verantwortlicher peer) als payload
 
