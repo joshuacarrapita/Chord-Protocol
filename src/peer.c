@@ -87,6 +87,9 @@ int proxy_request(server *srv, int csocket, packet *p, peer *n) {
         //packet_free(rsp); -> segfault?
         sendall(csocket, raw_pkt_client, raw_size_client);
     }
+
+    // close socket of client
+    server_close_socket(srv, csocket);
     return CB_REMOVE_CLIENT;
 }
 
@@ -138,27 +141,18 @@ int handle_own_request(server *srv, client *c, packet *p) {
     // in hashtable nachschauen (ht)
     // response an client zurückschicken (ACK FLAG)
 
-    //TODO: key_len = 0 -> response without ACK flag
-
+    packet *return_packet = packet_new();
 
     //check if p is set get or delete request
     if (p->flags & PKT_FLAG_SET) {
         // set flag
         htable_set(ht, p->key, p->key_len, p->value, p->value_len);
-        packet *return_packet = packet_new();
 
         // set ACK and get flag
         return_packet->flags = (PKT_FLAG_SET) + (PKT_FLAG_ACK);
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     } else if (p->flags & PKT_FLAG_GET) {
         // get flag
         htable *result = htable_get(ht, p->key, p->key_len);
-
-        packet *return_packet = packet_new();
 
         if (result == NULL) {
             // if result is NULL then no ACK flag
@@ -173,11 +167,6 @@ int handle_own_request(server *srv, client *c, packet *p) {
             return_packet->value = memcpy(return_packet->value, result->value, result->value_len);
             return_packet->value_len = result->value_len;
         }
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     } else if (p->flags & PKT_FLAG_DEL) {
         // delete flag
 
@@ -185,8 +174,6 @@ int handle_own_request(server *srv, client *c, packet *p) {
         int status = htable_delete(ht, p->key, p->key_len);
 
         htable_set(ht, p->key, p->key_len, p->value, p->value_len);
-        packet *return_packet = packet_new();
-
         if (status == 0) {
             // if delete succeeded send DEL and ACK flag
             return_packet->flags = (PKT_FLAG_DEL) + (PKT_FLAG_ACK);
@@ -194,24 +181,20 @@ int handle_own_request(server *srv, client *c, packet *p) {
             // send only DEL flag if not succeeded
             return_packet->flags = PKT_FLAG_DEL;
         }
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     } else {
         // sollte nicht eintreten
         htable_set(ht, p->key, p->key_len, p->value, p->value_len);
-        packet *return_packet = packet_new();
 
         // set no flag
         return_packet->flags = 0;
-
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-        packet_free(return_packet);
-        sendall(c->socket, raw_pkt, raw_size);
     }
+
+    size_t raw_size;
+    unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
+    packet_free(return_packet);
+    sendall(c->socket, raw_pkt, raw_size);
+
+    server_close_socket(srv, c->socket);
     return CB_REMOVE_CLIENT;
 }
 
@@ -223,7 +206,6 @@ int handle_own_request(server *srv, client *c, packet *p) {
  * @return int The callback status
  */
 int answer_lookup(packet *p, peer *n) {
-    /* TODO IMPLEMENT */
     // schickt PKT_FLAG_RPLY an urspungs peer (in p: peer)
     // mit peer (n) (ergebnis- aka verantwortlicher peer) als payload
 
