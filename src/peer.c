@@ -173,7 +173,6 @@ int handle_own_request(server *srv, client *c, packet *p) {
         // delete key
         int status = htable_delete(ht, p->key, p->key_len);
 
-        htable_set(ht, p->key, p->key_len, p->value, p->value_len);
         if (status == 0) {
             // if delete succeeded send DEL and ACK flag
             return_packet->flags = (PKT_FLAG_DEL) + (PKT_FLAG_ACK);
