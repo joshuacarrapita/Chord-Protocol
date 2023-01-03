@@ -1,7 +1,6 @@
 #pragma once
 
 #include "uthash.h"
-#include <string.h>
 
 /*
  * This is the structure that will be used to store (the data in) the hash

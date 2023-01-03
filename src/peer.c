@@ -318,9 +318,9 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
  * @return int The callback status
  */
 int handle_packet(server *srv, client *c, packet *p) {
-    if (p->flags & PKT_FLAG_CTRL) { // Handle a control packet from another peer.
+    if (p->flags & PKT_FLAG_CTRL) {
         return handle_packet_ctrl(srv, c, p);
-    } else { // Handle a key request request from a client.
+    } else {
         return handle_packet_data(srv, c, p);
     }
 }
@@ -367,8 +367,8 @@ int main(int argc, char **argv) {
 
     // Initialize all chord peers
     self = peer_init(
-            idSelf, hostSelf,
-            portSelf); //  Not really necessary but convenient to store us as a peer
+        idSelf, hostSelf,
+        portSelf); //  Not really necessary but convenient to store us as a peer
     pred = peer_init(idPred, hostPred, portPred); //
 
     succ = peer_init(idSucc, hostSucc, portSucc);
