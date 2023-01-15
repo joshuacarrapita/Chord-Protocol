@@ -120,10 +120,11 @@ uint32_t peer_get_ip(const peer *p) {
 }
 
 int peer_is_responsible(uint16_t pred_id, uint16_t peer_id, uint16_t hash_id) {
-    if (peer_id > pred_id)
-        return peer_id >= hash_id && hash_id > pred_id;
-    else // peer and pred are connected over the boundary of the ring
-        return peer_id >= hash_id || hash_id > pred_id;
+    if (pred_id > peer_id) { // Zero-crossing
+        return hash_id > pred_id || hash_id <= peer_id;
+    } else {
+        return hash_id > pred_id && hash_id <= peer_id;
+    }
 }
 
 void peer_disconnect(peer *p) {

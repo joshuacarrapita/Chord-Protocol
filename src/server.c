@@ -117,6 +117,10 @@ void server_stop(server *srv) {
 }
 
 void server_run(server *srv) {
+    /**
+     * TODO:
+     * Add periodic dissemination of stabilize messages.
+     */
     listen(srv->socket, 10);
     srv->active = true;
     fprintf(stderr, "Starting server. Press any key to exit.\n");

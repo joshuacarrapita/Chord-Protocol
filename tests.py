@@ -1,21 +1,31 @@
-import ipaddress
+import docker
 import queue
-import subprocess
+import ipaddress
+import time
 import logging
 
-import docker
-
-from ..common import which, exec_async, TKNTestCase, run_tests, log_test, port_ready
+from ..common import exec_async, which, ExecAsyncHandler, TKNTestCase, run_tests
 from ..node import DockerThread
-from ..packet import Packet, DataPacket, ControlPacket
-from ..mock import MockServer, MockClient, ControlPktHandler, GeneralPktHandler, DataPktHandler
+from ..packet import DataPacket, ControlPacket, NullPacket, Packet
+from ..mock import MockServer, MockClient, GeneralPktHandler, ControlPktHandler
 
-ASSIGNMENT = 'Projekt 2 DHT'
+import subprocess
+
+ASSIGNMENT = 'Abgabe Block 6'
 
 docker_cli = None
 container_network = None
-container_peer = None
-container_mock = None
+container_peer, container_mock = None, None
+
+
+def collect_trace(handlers: [ExecAsyncHandler]):
+    traces = []
+
+    for i, h in enumerate(handlers):
+        status, out, err = h.collect()
+        traces.append(f'Stdout{i}: {out} // Stderr{i}: {err}')
+
+    return ' '.join(traces)
 
 
 def pseudo_hash(key: bytes):
@@ -27,8 +37,7 @@ def pseudo_hash(key: bytes):
         return key[0] << 8
 
 
-class PeerTestCase(TKNTestCase):
-    startupTimeout = 3
+class JoinAndFTTestCase(TKNTestCase):
     expected_files = ['peer']
 
     @classmethod
@@ -65,7 +74,7 @@ class PeerTestCase(TKNTestCase):
         self.addCleanup(peer_thread.join)
 
         try:
-            peer = q.get(timeout=5)
+            peer: MockServer = q.get(timeout=5)
             self.addCleanup(peer.server_close)
             self.addCleanup(peer.shutdown)
         except queue.Empty:
@@ -73,76 +82,11 @@ class PeerTestCase(TKNTestCase):
 
         return peer_thread, peer
 
-    def basic_setup(self, req_handler, id, pre_id, suc_id):
-        """ Starts the students peer with a Mock-Successor (no predecessor is started).
-        :param req_handler: A instance of the PacketHandler handed to the MockServer
-        :param id: ID of the started peer
-        :param pre_id: ID of the predecessor given to the started peer
-        :param suc_id: ID of the successor given to the started peer
-        :return: Returns a tupel of the ExecAsyncHandler for the started peer and the MockServer started as successor
-        :rtype: tuple(ExecAsyncHandler, MockServer)
-        """
-        peer_path = which(self.path, 'peer')
-
-        suc_thread, succ = self.start_peer(1401, req_handler)
-
-        ip = self.container_peer_ip
-        pre_ip = self.container_mock_ip
-        pre_port = 1400
-
-        suc_ip = pre_ip
-        suc_port = pre_port + 1
-
-        handler = exec_async(container_peer, [f'{peer_path}', f'{id}', f'{ip}', '1400',
-                                              f'{pre_id}', f'{pre_ip}', f'{pre_port}',
-                                              f'{suc_id}', f'{suc_ip}', f'{suc_port}'])
-
-        ready = port_ready(container_peer, 1400, self.startupTimeout)
-        self.assertTrue(ready,
-                        msg=f'Peer did not open port {1400} within {self.startupTimeout} seconds after starting!')
-
-        return handler, succ
-
-    def setup_student_peers(self, ids):
-        """Starts multiple instances of the students peer with the ID taken from ids.
-        Instances are started in the supplied order with a small delay in between.
-        :param ids: List of IDs, one for each node to be started. Make sure this is sorted!
-        :return: A tuple of a list of handlers for the started peers and a list of ports used for each node.
-        :rtype: tuple(list(ExecAsyncHandler), list(int))
-        """
-        peer_path = which(self.path, 'peer')
-        ip = self.container_peer_ip
-        port_base = 1400
-
-        ports = [port_base + n for n in range(len(ids))]
-        handlers = []
-        for i in range(len(ids)):
-            handler = exec_async(container_peer, [f'{peer_path}', f'{ids[i]}', f'{ip}', f'{ports[i]}',
-                                                  f'{ids[i - 1]}', f'{ip}', f'{ports[-1]}',
-                                                  f'{ids[(i + 1) % len(ids)]}', f'{ip}',
-                                                  f'{ports[(i + 1) % len(ids)]}'])
-
-            ready = port_ready(container_peer, ports[i], self.startupTimeout)
-            self.assertTrue(ready,
-                            msg=f'Peer {ids[i]} did not open port {ports[i]} within {self.startupTimeout} '
-                                f'seconds after starting!')
-
-            handlers.append(handler)
-
-        return handlers, ports
-
     def start_client(self, packet: Packet, port=1400):
-        """Starts a client in the Mock container network namespace to send to send a given packet
-        :param packet: Packet to be send
-        :param port: Port to connect to on the peer container
-        :return The created MockClient instance
-        :raises AssertionError() if the client cannot connect to the server
-        """
         c = MockClient(packet, port=port)
 
         client_thread = DockerThread(container_mock, target=c.run)
         client_thread.start()
-        self.addCleanup(client_thread.join)
         self.addCleanup(c.stop)
 
         resolved = c.resolvedName.wait(3.0)
@@ -151,665 +95,348 @@ class PeerTestCase(TKNTestCase):
 
         connected = c.clientConnected.wait(3.0)
         if not connected:
-            raise AssertionError()
+            raise AssertionError(f"Could not connect to peer on port {port}")
 
         return c
 
-    @log_test
-    def test_trigger_lookup_minimal(self):
-        """Test whether a GET request from an unknown range triggers a lookup.
+    def start_student_peer(self, port: int, node_id, anchor_ip=None, anchor_port=None):
+        peer_path = which(self.path, 'peer')
+        ip = self.container_peer_ip
 
-        The students peer is started similar to the following command:
+        if anchor_port is not None and anchor_ip is not None:
+            handler: ExecAsyncHandler = exec_async(container_peer,
+                                                   [f'{peer_path}', f'{ip}', f'{port}', f'{node_id}',
+                                                    f'{anchor_ip}', f'{anchor_port}'])
+        elif node_id is not None:
+            handler: ExecAsyncHandler = exec_async(container_peer,
+                                                   [f'{peer_path}', f'{ip}', f'{port}', f'{node_id}'])
+        else:
+            handler: ExecAsyncHandler = exec_async(container_peer,
+                                                   [f'{peer_path}', f'{ip}', f'{port}'])
 
-        ./peer 10 {MyIP} 1400 1 {OtherIP} 1401 21616 {OtherIP} 1400
+        return handler
 
-        Then a client is started from the mock container namespace and sends a GET request for the following key:
+    def setup_student_ring(self, node_ids, port_base=4000, ignore_first_id=False):
+        handlers = []
+        ports = []
+        ip = self.container_peer_ip
+        for i, node_id in enumerate(node_ids):
+            ports.append(port_base + i)
+            if i == 0 and not ignore_first_id:
+                handlers.append(self.start_student_peer(port_base, node_id))
+            elif i == 0 and ignore_first_id:
+                handlers.append(self.start_student_peer(port_base, None))
+            else:
+                handlers.append(self.start_student_peer(port_base + i, node_id, ip, port_base))
 
-        key = b'Trigger_dat_lookup'  # ID: 21618
+        return handlers, ports
 
-        Since this key maps *beyond* the successors ID range this should trigger a lookup to the successor.
-        This test fails if:
-            - We do not receive a ControlPacket (Ctrl-bit == 1) at the successor within 2.0 seconds
+    def test_trigger_join_minimal(self):
+        node_id = 42
+        anchor_thread, anchor = self.start_peer(1400, ControlPktHandler)
+        handler = self.start_student_peer(1400, node_id, self.container_mock_ip, 1400)
 
-        NOTE: We do not check anything in the LOOKUP. Not even if it IS a lookup.
-              It just needs to be a valid control packet.
-        """
-        key = b'Trigger_dat_lookup'  # ID: 21618
-        hash = pseudo_hash(key)
-
-        handler, succ = self.basic_setup(ControlPktHandler, 10, 1, hash - 2)
-
-        try:
-            self.start_client(DataPacket('GET', key=key))
-        except AssertionError:
+        join_pkt: ControlPacket = anchor.await_packet(ControlPacket, 2.0)
+        if join_pkt is None:
             status, out, err = handler.collect()
-            if out.startswith(b'cannot exec in a stopped state: unknown'):
-                raise RuntimeError(f'Shitty docker error with unknown cause: {out}')
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
+            self.fail(f"Did not receive a JOIN msg within timeout! Stdout: {out}, Stderr:{err}")
 
-        ctrl_packet = succ.await_packet(ControlPacket, 2.0)
-        if ctrl_packet is None:
+    def test_join_correct(self):
+        node_id = 42
+        node_port = 2000
+        anchor_thread, anchor = self.start_peer(1400, ControlPktHandler)
+        handler = self.start_student_peer(node_port, node_id, self.container_mock_ip, 1400)
+
+        join_pkt: ControlPacket = anchor.await_packet(ControlPacket, 2.0)
+        if join_pkt is None:
             status, out, err = handler.collect()
-            self.fail(msg=f"Did not receive a lookup request within timeout! Stdout: {out}, Stderr:{err}")
+            self.fail(f"Did not receive a JOIN msg within timeout! Stdout: {out}, Stderr:{err}")
 
-    @log_test
-    def test_trigger_get_minimal(self):
-        """Test whether a Client GET request triggers a proxy-GET request to the successor.
+        self.assertEqual(join_pkt.method, 'JOIN')
+        self.assertEqual(join_pkt.node_id, node_id, msg="Peer sent wrong node id in JOIN msg.")
+        self.assertEqual(join_pkt.ip, ipaddress.IPv4Address(self.container_peer_ip),
+                         msg=f"Peer sent wrong ip in JOIN msg. Raw packet: {join_pkt.raw}")
+        self.assertEqual(join_pkt.port, node_port, msg="Peer sent wrong port in JOIN msg.")
 
-        The students peer is started similar to the following command:
+    def test_full_join_student(self):
+        node_id = 42
+        node_port = 2000
 
-        ./peer 10 {MyIP} 1400 1 {OtherIP} 1401 18282 {OtherIP} 1400
+        succ_id = 100
+        succ_ip = ipaddress.IPv4Address(self.container_mock_ip)
+        succ_port = 1400
 
-        Then a client is started from the mock container namespace and sends a GET request for the following key:
+        pre_id = 10
+        pre_ip = ipaddress.IPv4Address(self.container_mock_ip)
+        pre_port = 1401
 
-        key = b'Gimme_a_GET!'  # ID: 18281
+        anchor_thread, anchor = self.start_peer(1400, GeneralPktHandler)
+        anchor.send_response = True
+        notify = ControlPacket('NOTIFY', 0, succ_id, succ_ip, succ_port)
+        anchor.resp_q.put((notify, self.container_peer_ip, node_port))
 
-        Since this key maps into the successors ID range this should trigger a proxy GET request to the successor.
-        This test fails if:
-            - We do not receive a DataPacket (Ctrl-bit == 0) at the successor within 2.0 seconds
+        handler = self.start_student_peer(node_port, node_id, self.container_mock_ip, 1400)
 
-        NOTE: We do not check anything in the GET request. It just needs to be a data packet and must be valid in terms
-        of size.
-        """
-        key = b'Gimme_a_GET!'  # ID: 18281
-        hash = pseudo_hash(key)
-
-        handler, succ = self.basic_setup(DataPktHandler, 10, 1, hash + 1)
-
-        try:
-            self.start_client(DataPacket('GET', key=key))
-        except AssertionError:
+        join_pkt: ControlPacket = anchor.await_packet(ControlPacket, 2.0)
+        if join_pkt is None:
             status, out, err = handler.collect()
-            if out.startswith(b'cannot exec in a stopped state: unknown'):
-                raise RuntimeError(f'Shitty docker error with unknown cause: {out}')
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
+            self.fail(f"Did not receive a JOIN msg within timeout! Stdout: {out}, Stderr:{err}")
 
-        data_packet = succ.await_packet(DataPacket, 2.0)
-        if data_packet is None:
+        stabilize = ControlPacket('STABILIZE', 0, pre_id, pre_ip, pre_port)
+        pre = self.start_client(stabilize, port=node_port)
+
+        try:
+            notify2 = pre.await_packet(2.5)
+            if notify2 is None:
+                status, out, err = handler.collect()
+                self.fail(
+                    f"Did not receive a NOTIFY response for stabilize msg within timeout! Stdout: {out}, Stderr:{err}")
+
+        except AssertionError:
+            raise AssertionError(
+                'Peer closed connection after STABILIZE! Either it crashed or it tries to send NOTIFY in a separate connection! In the second case: This is stupid but might still be valid.')
+
+        self.assertEqual(notify2.method, 'NOTIFY')
+
+        stabilize2 = anchor.await_packet(ControlPacket, 5.0)
+        if stabilize2 is None:
             status, out, err = handler.collect()
-            self.fail(f"Did not receive a GET request within timeout! Stdout: {out}, Stderr:{err}")
+            self.fail(
+                f"Did not receive a STABILIZE within timeout after JOIN! Stdout: {out}, Stderr:{err}")
 
-    @log_test
-    def test_forward_lookup(self):
-        """Test whether the peer forwards lookup requests correctly on the ring.
-        The students peer is started similar to the following command:
+        self.assertEqual(stabilize2.method, "STABILIZE")
 
-        ./peer 10 {MyIP} 1400 1 {OtherIP} 1401 1025 {OtherIP} 1400
+        lookup1 = ControlPacket('LOOKUP', pre_id - 5, 9999, pre_ip, pre_port)  # Should be forwarded
+        c1 = self.start_client(lookup1, port=node_port)
 
-        Then a LOOKUP request is sent to the peer with following data:
-        Hash ID: 2000
-        Node ID: 10000
-        Node IP: {IP of mock container}
-        Node Port: 4096
-
-        A correct peer should forward this request since it is not in his ID interval.
-
-        This test fails if:
-            - We do not receive a CtrlPacket (Ctrl-bit == 1) at the successor within 2.0 seconds
-
-
-        NOTE: We do not check anything in the LOOKUP request. It just needs to be a valid control packet.
-        """
-        hash = 2000
-        imaginary_id = 10000
-        imaginary_ip = ipaddress.IPv4Address(self.container_mock_ip)
-        imaginary_port = 4096
-        handler, succ = self.basic_setup(ControlPktHandler, 10, 1, 1025)
-
-        try:
-            self.start_client(ControlPacket('LOOKUP', hash, imaginary_id, imaginary_ip, imaginary_port))
-        except AssertionError:
+        forwarded_l: ControlPacket = anchor.await_packet(ControlPacket, 2.0)
+        if not forwarded_l:
             status, out, err = handler.collect()
-            if out.startswith(b'cannot exec in a stopped state: unknown'):
-                raise RuntimeError(f'Shitty docker error with unknown cause: {out}')
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
+            self.fail(
+                f"Peer did not forward lookup to succ within timeout! JOIN might not be completed. Stdout: {out}, Stderr:{err}")
 
-        lookup = succ.await_packet(ControlPacket, 2.0)
-        if lookup is None:
+        self.assertEqual(forwarded_l.method, 'LOOKUP',
+                         msg=f"Expected LOOKUP but got {forwarded_l.method} instead. Is the peer spamming STABILIZE? ")
+
+        lookup2 = ControlPacket('LOOKUP', succ_id - 1, 9999, succ_ip, succ_port)  # Should not be forwarded
+        c2 = self.start_client(lookup2, port=node_port)
+
+        reply: ControlPacket = anchor.await_packet(ControlPacket, 2.0)
+        if not reply:
             status, out, err = handler.collect()
-            self.fail(f"Peer did not forward lookup to successor! Stdout: {out}, Stderr:{err}")
+            self.fail(
+                f"Peer did not reply to lookup within timeout! JOIN might not be completed. Stdout: {out}, Stderr:{err}")
 
-    @log_test
-    def test_get_full_circle(self):
-        """Tests a full sequence for client GET request that needs to be fetched from another node.
+        self.assertEqual(reply.method, 'REPLY')
+        self.assertEqual(reply.node_id, succ_id)
 
-        First, the students peer is started similar to the following command:
+    def test_initial_ring(self):
+        node_id = 42
+        node_port = 2000
+        handler = self.start_student_peer(node_port, node_id)
 
-        ./peer 10 {MyIP} 1400 1 {OtherIP} 1401 21607 {OtherIP} 1400
+        other_id = 123
+        other_ip = ipaddress.IPv4Address(self.container_mock_ip)
+        other_port = 1400
+        _, other_peer = self.start_peer(other_port, GeneralPktHandler)
 
-        Now a GET request by a client is sent to the peer with the following key:
+        join = ControlPacket('JOIN', 0, other_id, other_ip, other_port)
+        c1 = self.start_client(join, port=node_port)
 
-        key = b'The ciiirrcle of Chord!'  # ID: 21608
-
-        The TB now expects the peer to send a LOOKUP to its successor within 2.0 seconds.
-        At this stage the TB fails if:
-            - No Lookup is received within the timeout
-            - The hash ID in the lookup does not match the hash for the key
-            - The node ID in the lookup does not match the peers ID
-            - The node IP in the lookup does not match the peer containers IP.
-              This is often caused by messing up the byte order.
-            - The node port in the lookup does not match the peers port
-
-        The successor will respond (immediately) with a REPlY packet with following values:
-        hash ID = 21608
-        Node ID = 21609
-        Node IP = {IP of the mock container}
-        Node Port = 1500
-
-        Now the TB expects the peer to send a GET request to supplied IP+port within 2.0 seconds.
-        At this stage the TB fails if:
-            - No GET is received within the timeout
-              (most probably IP and port are parsed wrong and the connection fails)
-            - The key for the GET request does not match the initial key requested.
-
-        Once the GET requested was received the responsible not will respond with GET-ACK packet:
-        key = b'The ciiirrcle of Chord!'
-        value = b'What goes around comes around!'
-
-        At last the peer must respond to the client within two seconds (after receiving the answer).
-        At this final stage the TB fails if:
-           - No answer is received by the client
-           - The key for the GET request does not match the initial key requested.
-           - The value for the GET request does not match the value supplied by the other peer.
-        """
-        key = b'The ciiirrcle of Chord!'  # ID: 21608
-        hash = pseudo_hash(key)
-        value = b'What goes around comes around!'
-
-        handler, succ = self.basic_setup(GeneralPktHandler, 10, 1, hash - 1)
-        succ.send_response = True
-
-        rp_thread, responsible_peer = self.start_peer(1500, GeneralPktHandler)
-        responsible_peer.send_response = True
-
-        student_peer_ip = self.container_peer_ip
-
-        succ.resp_q.put((ControlPacket('REPLY', hash, hash + 1, responsible_peer.ip, 1500), student_peer_ip, 1400))
-        responsible_peer.resp_q.put(DataPacket('GET', key=key, value=value, ack=True))
-
-        try:
-            c = self.start_client(DataPacket('GET', key=key))
-        except AssertionError:
+        notify: ControlPacket = other_peer.await_packet(ControlPacket, 2.0)
+        if not notify:
             status, out, err = handler.collect()
-            if out.startswith(b'cannot exec in a stopped state: unknown'):
-                raise RuntimeError(f'Shitty docker error with unknown cause: {out}')
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
+            self.fail(
+                f"Peer did not reply to JOIN within timeout! Expected NOTIFY. Stdout: {out}, Stderr:{err}")
 
-        lookup = succ.await_packet(ControlPacket, 2.0)
-        if lookup is None:
+        self.assertEqual(notify.method, 'NOTIFY')
+        self.assertEqual(notify.node_id, node_id)
+        self.assertEqual(notify.ip, ipaddress.IPv4Address(self.container_peer_ip))
+        self.assertEqual(notify.port, node_port)
+
+        stabilize: ControlPacket = other_peer.await_packet(ControlPacket, 2.5)
+        if not stabilize:
             status, out, err = handler.collect()
-            self.fail(f"Did not receive a Lookup request within timeout! Stdout: {out}, Stderr:{err}")
+            self.fail(
+                f"Peer did not send STABILIZE within timeout! Stdout: {out}, Stderr:{err}")
 
-        self.assertEqual(lookup.hash_id, hash, msg='Peer requested lookup for wrong hash id!')
-        self.assertEqual(lookup.node_id, 10, msg='Peer filled in wrong node id in lookup request!')
-        self.assertEqual(lookup.ip, ipaddress.IPv4Address(student_peer_ip),
-                         msg=f'Peer filled in wrong IP in lookup request! Raw: {lookup.raw}')
-        self.assertEqual(lookup.port, 1400, msg='Peer filled in wrong port in lookup request!')
+        self.assertEqual(stabilize.method, 'STABILIZE')
+        self.assertEqual(stabilize.node_id, node_id)
 
-        get = responsible_peer.await_packet(DataPacket, 2.0)
-        if get is None:
-            status, out, err = handler.collect()
-            self.fail(f"Responsible peer did not receive a get request within timeout! Stdout: {out}, Stderr:{err}")
+    def test_join_mock_peer(self):
+        log = logging.getLogger(__name__)
+        node1_id = 100
+        node1_port = 2000
+        node1_ip = ipaddress.IPv4Address(self.container_peer_ip)
 
-        self.assertEqual(get.key, key, msg="Peer requested wrong key!")
+        node2_id = 200
+        node2_port = 2001
+        node2_ip = ipaddress.IPv4Address(self.container_peer_ip)
+
+        mock_id = 150
+        mock_port = 1400
+        mock_ip = ipaddress.IPv4Address(self.container_mock_ip)
+
+        handler1 = self.start_student_peer(node1_port, node1_id)
+        handler2 = self.start_student_peer(node2_port, node2_id, node1_ip, node1_port)
+
+        _, mock = self.start_peer(mock_port, GeneralPktHandler)
+        mock.send_response = True
+        mock.resp_q.put(NullPacket())  # Do not respond to notify
+
+        join = ControlPacket('JOIN', 0, mock_id, mock_ip, mock_port)
+        c1 = self.start_client(join, port=node1_port)
+
+        notify: ControlPacket = mock.await_packet(ControlPacket, 2.5)
+        if not notify:
+            _, out1, err1 = handler1.collect()
+            _, out2, err2 = handler2.collect()
+            self.fail(
+                f"Peer did not reply to JOIN within timeout! Expected NOTIFY. Stdout1: {out1}, Stderr1:{err1}, Stdout2: {out2}, Stderr2:{err2}")
+
+        self.assertEqual(notify.method, 'NOTIFY')
+        self.assertEqual(notify.node_id, node2_id)
+
+        stabilize: ControlPacket = mock.await_packet(ControlPacket, 5.0)
+        if not stabilize:
+            _, out1, err1 = handler1.collect()
+            _, out2, err2 = handler2.collect()
+            self.fail(
+                f"Peer did not send STABILIZE within timeout! Stdout1: {out1}, Stderr1:{err1}, Stdout2: {out2}, Stderr2:{err2}")
+
+        mock.resp_q.put(ControlPacket('NOTIFY', 0, stabilize.node_id, stabilize.ip, stabilize.port))
+
+        self.assertEqual(stabilize.method, 'STABILIZE')
+
+        i = 0
+        while stabilize.node_id != node1_id and i < 3:  # We might have JOINed to early (before node2 finished). So try again
+            log.debug("Trying again")
+            stabilize: ControlPacket = mock.await_packet(ControlPacket, 5.0)
+            if not stabilize:
+                _, out1, err1 = handler1.collect()
+                _, out2, err2 = handler2.collect()
+                self.fail(
+                    f"Peer did not send STABILIZE within timeout! Stdout1: {out1}, Stderr1:{err1}, Stdout2: {out2}, Stderr2:{err2}")
+
+            self.assertEqual(stabilize.method, 'STABILIZE')
+            mock.resp_q.put(ControlPacket('NOTIFY', 0, stabilize.node_id, stabilize.ip, stabilize.port))
+            i += 1
+
+        self.assertEqual(stabilize.node_id, node1_id)
+
+    def test_student_code_only_set_get(self):
+        nodes = [512, 1024, 2048, 4096]
+        handlers, ports = self.setup_student_ring(nodes)
+        time.sleep(len(nodes) * 2 + 0.5)
+
+        value = b'You have invited all my friends!'
+        key = b'Good Thinking!'
+        c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])
 
         try:
-            resp = c.await_packet(2.0)
+            c1.await_packet(2.0)
         except AssertionError:
-            status, out, err = handler.collect()
-            raise AssertionError(f'Peer did not answer the client correctly! Stdout: {out}, Stderr:{err}')
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive ACK packet. Trace: {trace}')
 
-        if resp is None:
-            status, out, err = handler.collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
+        c2 = self.start_client(DataPacket('GET', key=key), ports[3])
+        get = c2.await_packet(2.0)
+        if not get:
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive response for GET request! {trace}')
 
-        self.assertEqual(resp.key, key, msg='Peer answered to client with wrong key!')
-        self.assertEqual(resp.value, value, msg='Peer answered to client with wrong value!')
+        self.assertEqual(get.value, value)
 
-    def not_a_test_get_full_circle_ipreversed(self):
-        handler, succ = self.basic_setup(GeneralPktHandler, 10, 1, 1000)
-        succ.send_response = True
+    def test_FT_minimal(self):
+        nodes = [512, 1024, 2048, 4096]
+        handlers, ports = self.setup_student_ring(nodes)
+        time.sleep(len(nodes) * 2 + 0.5)
 
-        rp_thread, responsible_peer = self.start_peer(1500, GeneralPktHandler)
-        responsible_peer.send_response = True
+        key = b"Where's the money, Donny!!"
+        value = b'Oh! Hi, Marc!'
+        c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])
 
-        key = b'\x04\x00The ciiirrcle of Chord!'  # ID: 1024
-        value = b'What goes around comes around!'
-
-        student_peer_ip = self.container_peer_ip
-        reversed_ip_peer = ipaddress.IPv4Address(".".join(reversed(str(responsible_peer.ip).split('.'))))
-
-        succ.resp_q.put((ControlPacket('REPLY', 1024, 1200, reversed_ip_peer, 1500), student_peer_ip, 1400))
-        responsible_peer.resp_q.put(DataPacket('GET', key=key, value=value, ack=True))
         try:
-            c = self.start_client(DataPacket('GET', key=key))
+            c1.await_packet(2.0)
         except AssertionError:
-            status, out, err = handler.collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive ACK packet. Trace: {trace}')
 
-        lookup = succ.await_packet(ControlPacket, 2.0)
-        if lookup is None:
-            status, out, err = handler.collect()
-            self.fail(f"Did not receive a Lookup request within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(lookup.hash_id, 1024, msg='Peer requested lookup for wrong hash id!')
-        self.assertEqual(lookup.node_id, 10, msg='Peer filled in wrong node id in lookup request!')
-        # self.assertEqual(lookup.ip, ipaddress.IPv4Address(student_peer_ip),
-        #                 msg=f'Peer filled in wrong IP in lookup request! Raw: {lookup.raw}')
-        self.assertEqual(lookup.port, 1400, msg='Peer filled in wrong port in lookup request!')
-
-        get = responsible_peer.await_packet(DataPacket, 2.0)
-        if get is None:
-            status, out, err = handler.collect()
-            self.fail(f"Responsible peer did not receive a get request within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(get.key, key, msg="Peer requested wrong key!")
-
-        resp = c.await_packet(2.0)
-        if resp is None:
-            status, out, err = handler.collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(resp.key, key, msg='Peer answered to client with wrong key!')
-        self.assertEqual(resp.value, value, msg='Peer answered to client with wrong value!')
-
-    @log_test
-    def test_student_ring_set_get_basic(self):
-        """Test simple SET-GET sequence among multiple instances of the student's peer.
-
-        First, five instances of the students peer are started in quick succession with the following IDs:
-
-        1000 --> 14107 --> 27214 --> 40321 --> 53428
-
-        Then a SET request is sent to peer 1000 with the following data:
-        key = b'How do I exit vim?'
-        value = b'https://stackoverflow.com/questions/11828270/how-do-i-exit-the-vim-editor'
-
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-        Once the client has received the ACK a GET request for the same key is sent by another client to peer 40321.
-
-        The client waits for an answer for 3.0 seconds.
-        This test fails if the value does not match the initial value set by the first client.
-        """
-        ids = [1000, 14107, 27214, 40321, 53428]
-        handlers, ports = self.setup_student_peers(ids)  # Starts 5 equally spaced peers in a ring
-
-        key = b'How do I exit vim?'
-        value = b'https://stackoverflow.com/questions/11828270/how-do-i-exit-the-vim-editor'
+        c2 = self.start_client(ControlPacket('FINGER', 0, 0, ipaddress.IPv4Address('0.0.0.0'), 0), port=ports[0])
 
         try:
-            c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])  # Set value in first peer
+            c2.await_packet(2.0)
         except AssertionError:
-            status, out, err = handlers[0].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive ACK packet. Trace: {trace}')
 
-        c1.await_packet(timeout=2.0)  # Wait for ACK before we query 2nd time
+        c3 = self.start_client(DataPacket('GET', key=key), ports[0])
+        get = c3.await_packet(2.0)
+        if not get:
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive response for GET request! {trace}')
+
+        self.assertEqual(get.value, value)
+
+    def test_FT_no_ack(self):
+        nodes = [512, 1024, 2048, 4096]
+        handlers, ports = self.setup_student_ring(nodes)
+        time.sleep(len(nodes) * 2 + 0.5)
+
+        key = b"Where's the money, Donny!!"
+        value = b'Oh! Hi, Marc!'
+        c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])
 
         try:
-            c2 = self.start_client(DataPacket('GET', key=key), port=ports[3])  # Retrieve value from 4th peer
+            c1.await_packet(2.0)
         except AssertionError:
-            status, out, err = handlers[4].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive ACK packet. Trace: {trace}')
 
-        resp = c2.await_packet(3.0)
-        if resp is None:
-            status, out, err = handlers[4].collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
+        c2 = self.start_client(ControlPacket('FINGER', 0, 0, ipaddress.IPv4Address('0.0.0.0'), 0), port=ports[0])
 
-        self.assertEqual(resp.value, value, msg='Peer answered to client with wrong value!')
+        time.sleep(0.5)
 
-    @log_test
-    def test_student_ring_set_del_set_get(self):
-        """Test SET-DELETE followed by SET-GET  on the same key among multiple instances of the student's peer.
+        c3 = self.start_client(DataPacket('GET', key=key), ports[0])
+        get = c3.await_packet(2.0)
+        if not get:
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive response for GET request! {trace}')
 
-        First, five instances of the students peer are started in quick succession with the following IDs:
+        self.assertEqual(get.value, value)
 
-        1000 --> 14107 --> 27214 --> 40321 --> 53428
+    def test_student_code_only_sg_no_id(self):
+        nodes = [0, 1024, 2048, 4096]
+        handlers, ports = self.setup_student_ring(nodes, ignore_first_id=True)
+        time.sleep(len(nodes) * 2 + 0.5)
 
-        Then a SET request is sent to peer 1000 with the following data:
-
-        key = b'My C-Programming-Skillz'
-        value1 = b'100% !!11einself!'
-
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-        Once the client has received the ACK a DELETE for the same key is sent by another client to peer 53428.
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-
-        Once the client has received the ACK a SET for the same key is sent by another client to peer 14107 with value
-        value2 = b'sendto()sendto()sendto()sendto()'
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-
-        Once the client has received the ACK a final GET request is made for the same key to peer 1000.
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-        The response is checked for the correct value (value2).
-        """
-
-        ids = [1000, 14107, 27214, 40321, 53428]
-        handlers, ports = self.setup_student_peers(ids)  # Starts 5 equally spaced peers in a ring
-
-        key = b'My C-Programming-Skillz'
-        whatIthink = b'100% !!11einself!'
-        whatMyTutorSees = b'sendto()sendto()sendto()sendto()'
+        value = b'You have invited all my friends!'
+        key = b'Good Thinking!'
+        c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])
 
         try:
-            c1 = self.start_client(DataPacket('SET', key=key, value=whatIthink),
-                                   port=ports[0])  # Set value in first peer
+            c1.await_packet(2.0)
         except AssertionError:
-            status, out, err = handlers[0].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c1.await_packet(timeout=2.0)  # Wait for ACK before we query 2nd time
-
-        try:
-            c2 = self.start_client(DataPacket('DELETE', key=key), port=ports[4])  # Delete value from 5th peer
-        except AssertionError:
-            status, out, err = handlers[4].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c2.await_packet(timeout=3.0)  # Wait for ACK before we query 3rd time
-
-        try:
-            c3 = self.start_client(DataPacket('SET', key=key, value=whatMyTutorSees), port=ports[1])  # Second peer
-        except AssertionError:
-            status, out, err = handlers[1].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c3.await_packet(timeout=2.0)  # Wait for ACK before we query 4th time
-
-        try:
-            c4 = self.start_client(DataPacket('GET', key=key), port=ports[0])  # Retrieve value from first peer again
-        except AssertionError:
-            status, out, err = handlers[0].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        resp = c4.await_packet(3.0)
-        if resp is None:
-            status, out, err = handlers[4].collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(resp.value, whatMyTutorSees, msg='Peer answered to client with wrong value!')
-
-    @log_test
-    def test_student_ring_long_value(self):
-        """Test SET-GET on the ring for long values.
-        Functionally identical to test_student_set_get_basic but with different values:
-
-        key = b'Fresh Prince of Bel Air'
-        value = (b"Now, this is a story all about how\n" ... --> full lyrics of the song repeated 100 times
-
-        The value is exactly 173700 bytes long.
-        """
-        key = b'Fresh Prince of Bel Air'
-        value = (b"Now, this is a story all about how\n"
-                 b"My life got flipped-turned upside down\n"
-                 b"And I'd like to take a minute\n"
-                 b"Just sit right there\n"
-                 b"I'll tell you how I became the prince of a town called Bel Air\n"
-                 b"\n"
-                 b"In west Philadelphia born and raised\n"
-                 b"On the playground was where I spent most of my days\n"
-                 b"Chillin' out maxin' relaxin' all cool\n"
-                 b"And all shootin some b-ball outside of the school\n"
-                 b"When a couple of guys who were up to no good\n"
-                 b"Started making trouble in my neighborhood\n"
-                 b"I got in one little fight and my mom got scared\n"
-                 b"She said 'You're movin' with your auntie and uncle in Bel Air'\n"
-                 b"\n"
-                 b"I begged and pleaded with her day after day\n"
-                 b"But she packed my suit case and sent me on my way\n"
-                 b"She gave me a kiss and then she gave me my ticket.\n"
-                 b"I put my Walkman on and said, 'I might as well kick it'.\n"
-                 b"\n"
-                 b"First class, yo this is bad\n"
-                 b"Drinking orange juice out of a champagne glass.\n"
-                 b"Is this what the people of Bel-Air living like?\n"
-                 b"Hmmmmm this might be alright.\n"
-                 b"\n"
-                 b"But wait I hear they're prissy, bourgeois, all that\n"
-                 b"Is this the type of place that they just send this cool cat?\n"
-                 b"I don't think so\n"
-                 b"I'll see when I get there\n"
-                 b"I hope they're prepared for the prince of Bel-Air\n"
-                 b"\n"
-                 b"Well, the plane landed and when I came out\n"
-                 b"There was a dude who looked like a cop standing there with my name out\n"
-                 b"I ain't trying to get arrested yet\n"
-                 b"I just got here\n"
-                 b"I sprang with the quickness like lightning, disappeared\n"
-                 b"\n"
-                 b"I whistled for a cab and when it came near\n"
-                 b"The license plate said fresh and it had dice in the mirror\n"
-                 b"If anything I could say that this cab was rare\n"
-                 b"But I thought 'Nah, forget it' - 'Yo, homes to Bel Air'\n"
-                 b"\n"
-                 b"I pulled up to the house about 7 or 8\n"
-                 b"And I yelled to the cabbie 'Yo homes smell ya later'\n"
-                 b"I looked at my kingdom\n"
-                 b"I was finally there\n"
-                 b"To sit on my throne as the Prince of Bel Air\n") * 100
-
-        ids = [1000, 14107, 27214, 40321, 53428]
-        handlers, ports = self.setup_student_peers(ids)  # Starts 5 equally spaced peers in a ring
-
-        try:
-            c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])  # Set value in first peer
-        except AssertionError:
-            status, out, err = handlers[0].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c1.await_packet(timeout=2.0)  # Wait for ACK before we query 2nd time
-
-        try:
-            c2 = self.start_client(DataPacket('GET', key=key), port=ports[3])  # Retrieve value from 4th peer
-        except AssertionError:
-            status, out, err = handlers[4].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        resp = c2.await_packet(3.0)
-        if resp is None:
-            status, out, err = handlers[4].collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(resp.value, value, msg='Peer answered to client with wrong value!')
-
-    @log_test
-    def test_student_ring_long_fixed_buffer(self):
-        """Test SET-GET on the ring for long values.
-        Functionally identical to test_student_set_get_basic but with different values:
-
-        key = b'Daft Punk'
-        value = b"Around the world!" * n
-
-        where n depends on the buffer size found in your source code.
-        """
-        import random
-        n = random.randint(0, 1337)
-
-        key = b'Daft Punk'
-
-        try:
-            value = b"Around the world!" * n
-        except MemoryError:
-            log = logging.getLogger(__name__)
-            log.warning('Ran out of memory for allocating value!')
-            self.skipTest(f"Could not allocate enough memory for n == {n}!")
-
-        ids = [1000, 14107, 27214, 40321, 53428]
-        handlers, ports = self.setup_student_peers(ids)  # Starts 5 equally spaced peers in a ring
-
-        try:
-            c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])  # Set value in first peer
-        except AssertionError:
-            status, out, err = handlers[0].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c1.await_packet(timeout=2.0)  # Wait for ACK before we query 2nd time
-
-        try:
-            c2 = self.start_client(DataPacket('GET', key=key), port=ports[3])  # Retrieve value from 4th peer
-        except AssertionError:
-            status, out, err = handlers[4].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        resp = c2.await_packet(3.0)
-        if resp is None:
-            status, out, err = handlers[4].collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(resp.value, value, msg='Peer answered to client with wrong value!')
-
-    @log_test
-    def test_student_ring_set_get_null(self):
-        """Test handling of \0-bytes (a third time) on the Chord ring.
-
-        Functionally identical to test_student_set_get_basic but with different values:
-
-        key = b'You still cannot handle \0 Bytes?'
-        value = b'https://www.tu-berlin.de/?id=76320'
-        """
-        ids = [1000, 14107, 27214, 40321, 53428]
-        handlers, ports = self.setup_student_peers(ids)  # Starts 5 equally spaced peers in a ring
-
-        key = b'You still cannot handle \0 Bytes?'
-        value = b'https://www.tu-berlin.de/?id=76320'
-
-        try:
-            c1 = self.start_client(DataPacket('SET', key=key, value=value), port=ports[0])  # Set value in first peer
-        except AssertionError:
-            status, out, err = handlers[0].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c1.await_packet(timeout=2.0)  # Wait for ACK before we query 2nd time
-
-        try:
-            c2 = self.start_client(DataPacket('GET', key=key), port=ports[3])  # Retrieve value from 4th peer
-        except AssertionError:
-            status, out, err = handlers[4].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        resp = c2.await_packet(3.0)
-        if resp is None:
-            status, out, err = handlers[4].collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(resp.value, value, msg='Peer answered to client with wrong value!')
-
-    @log_test
-    def test_student_ring_set_set_get(self):
-        """Test overwriting of values on the Chord ring.
-
-        First, five instances of the students peer are started in quick succession with the following IDs:
-
-        1000 --> 14107 --> 27214 --> 40321 --> 53428
-
-        Then a SET request is sent to peer 1000 with the following data:
-
-        key = b'How do I exit vim?'
-        value1 = b'RTFM!'  # Use shorter value first to see if the value length is adjusted
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-
-        Once the client has received the ACK another  SET for the same key is sent by another client to peer 14107.
-        value2 = b'https://stackoverflow.com/questions/11828270/how-do-i-exit-the-vim-editor'
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-
-        Once the client has received the ACK a final GET request is made for the same key to peer 40321.
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-        The response is checked for the correct value (value2).
-        """
-        ids = [1000, 14107, 27214, 40321, 53428]
-        handlers, ports = self.setup_student_peers(ids)  # Starts 5 equally spaced peers in a ring
-
-        key = b'How do I exit vim?'
-
-        value1 = b'RTFM!'  # Use shorter value first to see if they adjust the value length
-        value2 = b'https://stackoverflow.com/questions/11828270/how-do-i-exit-the-vim-editor'
-
-        try:
-            c1 = self.start_client(DataPacket('SET', key=key, value=value1), port=ports[0])  # Set value in first peer
-        except AssertionError:
-            status, out, err = handlers[0].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c1.await_packet(timeout=2.0)  # Wait for ACK before we query 2nd time
-
-        try:
-            c2 = self.start_client(DataPacket('SET', key=key, value=value2), port=ports[1])  # Set value in 2nd peer
-        except AssertionError:
-            status, out, err = handlers[1].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c2.await_packet(timeout=2.0)  # Wait for ACK before we query 3rd time
-
-        try:
-            c3 = self.start_client(DataPacket('GET', key=key), port=ports[3])  # Retrieve value from 4th peer
-        except AssertionError:
-            status, out, err = handlers[3].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        resp = c3.await_packet(3.0)
-        if resp is None:
-            status, out, err = handlers[3].collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
-
-        self.assertEqual(resp.value, value2, msg='Peer answered to client with wrong value!')
-
-    @log_test
-    def test_student_ring_set_get_cross_zero(self):
-        """Test simple SET-GET sequence among multiple instances of the student's peer reaching across zero.
-
-        First, five instances of the students peer are started in quick succession with the following IDs:
-
-        1000 --> 14107 --> 27214 --> 40321 --> 53428
-
-        Then a SET request is sent to peer 53428 with the following data:
-        key = b'How do I exit vim?' # maps to 18543 --> node 27214
-        value = b'https://stackoverflow.com/questions/11828270/how-do-i-exit-the-vim-editor'
-
-        This means the lookup should be sent across 0 via node 1000 and node 14107.
-
-        The TB awaits an acknowledgement to the client within 2.0 seconds.
-        Once the client has received the ACK a GET request for the same key is sent by another client to peer 14107.
-
-        The client waits for an answer for 3.0 seconds.
-        This test fails if the value does not match the initial value set by the first client.
-        """
-        ids = [1000, 14107, 27214, 40321, 53428]
-        handlers, ports = self.setup_student_peers(ids)  # Starts 5 equally spaced peers in a ring
-
-        key = b'How do I exit vim?'  # maps to 18543 -> 3rd node
-        value = b'https://stackoverflow.com/questions/11828270/how-do-i-exit-the-vim-editor'
-
-        try:
-            c1 = self.start_client(DataPacket('SET', key=key, value=value),
-                                   port=ports[4])  # Set value in fifth peer
-        except AssertionError:
-            status, out, err = handlers[4].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        c1.await_packet(timeout=2.0)  # Wait for ACK before we query 2nd time
-
-        try:
-            c2 = self.start_client(DataPacket('GET', key=key), port=ports[1])  # Retrieve value from 2nd peer
-        except AssertionError:
-            status, out, err = handlers[1].collect()
-            raise AssertionError(f"Client could not connect to peer! Stdout: {out}, Stderr:{err}") from None
-
-        resp = c2.await_packet(3.0)
-        if resp is None:
-            status, out, err = handlers[1].collect()
-            self.fail(f"Peer did not answer the client within timeout! Stdout: {out}, Stderr:{err}")
-
-        # self.assertEqual(resp.key, key, msg='Peer answered to client with wrong key!')
-        self.assertEqual(resp.value, value, msg='Peer answered to client with wrong value!')
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive ACK packet. Trace: {trace}')
+
+        c2 = self.start_client(DataPacket('GET', key=key), ports[3])
+        get = c2.await_packet(2.0)
+        if not get:
+            trace = collect_trace(handlers)
+            self.fail(f'Did not receive response for GET request! {trace}')
+
+        self.assertEqual(get.value, value)
 
 
 def main():
+
     def pre():
         global docker_cli, container_network, container_peer, container_mock
 
         dockercli = docker.from_env()
         container_network = dockercli.networks.create('testnet',
-                                                  internal=True)
+                                                      internal=True)
 
         dockercli.volumes.create('src_vol')
         volumes = {'src_vol': {'bind': '/mnt/src', 'mode': 'rw'}}
@@ -835,10 +462,10 @@ def main():
 
     def post():
         subprocess.run(['bash', '-c',
-                        'docker stop hash-peer; docker stop mock-peer; docker container prune -f; '
-                        'docker network prune -f'])
+                        'docker stop hash-peer; docker stop mock-peer; docker container prune -f; docker network prune -f'])
 
     run_tests(ASSIGNMENT, 'src_vol', pre=pre, post=post)
+
 
 
 if __name__ == '__main__':

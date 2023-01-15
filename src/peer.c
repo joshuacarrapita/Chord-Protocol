@@ -26,27 +26,21 @@ peer *succ = NULL;
  * @return int The status of the sending procedure
  */
 int forward(peer *p, packet *pack) {
-    // gets called on successor while looking up a responsible node for a data pack / hash_id and current and
-    // successor are not responsible
-    // send packet (pack) (should always be a control pack with lookup flag) to peer (successor) (ip+port given in p)
-    // over websocket so that it can handle the control request
-
-    if (peer_connect(p) == 0) {
-        // socket of peer is n->socket
-
-        // send packet to peer
-        size_t raw_size_peer;
-        unsigned char *raw_pkt_peer = packet_serialize(pack, &raw_size_peer);
-        //packet_free(pack);
-        sendall(p->socket, raw_pkt_peer, raw_size_peer);
-
-        // disconnect from peer
-        peer_disconnect(p);
-        return 0;
-    }
-    else {
+    // check whether we can connect to the peer
+    if (peer_connect(p) != 0) {
+        fprintf(stderr, "Failed to connect to peer %s:%d\n", p->hostname,
+                p->port);
         return -1;
     }
+
+    size_t data_len;
+    unsigned char *raw = packet_serialize(pack, &data_len);
+    int status = sendall(p->socket, raw, data_len);
+    free(raw);
+    raw = NULL;
+
+    peer_disconnect(p);
+    return status;
 }
 
 /**
@@ -59,37 +53,27 @@ int forward(peer *p, packet *pack) {
  * @return int The callback status
  */
 int proxy_request(server *srv, int csocket, packet *p, peer *n) {
-    // forward packet (p) (should always be data packet) onto peer (n)
-    // after response of peer send response back to client
-
-    // connect to peer
-    if (peer_connect(n) == 0) {
-        // socket of peer is n->socket
-
-        // send packet to peer
-        size_t raw_size_peer;
-        unsigned char *raw_pkt_peer = packet_serialize(p, &raw_size_peer);
-        packet_free(p);
-        sendall(n->socket, raw_pkt_peer, raw_size_peer);
-
-        // get response from peer and write in rsp
-        size_t response_len;
-        unsigned char *response = recvall(n->socket, &response_len);
-        packet *rsp = packet_decode(response, response_len);
-        free(response);
-
-        // disconnect from peer
-        peer_disconnect(n);
-
-        // send response of peer to client
-        size_t raw_size_client;
-        unsigned char *raw_pkt_client = packet_serialize(rsp, &raw_size_client);
-        //packet_free(rsp); -> segfault?
-        sendall(csocket, raw_pkt_client, raw_size_client);
+    // check whether we can connect to the peer
+    if (peer_connect(n) != 0) {
+        fprintf(stderr,
+                "Could not connect to peer %s:%d to proxy request for client!",
+                n->hostname, n->port);
+        return CB_REMOVE_CLIENT;
     }
 
-    // close socket of client
-    server_close_socket(srv, csocket);
+    size_t data_len;
+    unsigned char *raw = packet_serialize(p, &data_len);
+    sendall(n->socket, raw, data_len);
+    free(raw);
+    raw = NULL;
+
+    size_t rsp_len = 0;
+    unsigned char *rsp = recvall(n->socket, &rsp_len);
+
+    // Just pipe everything through unfiltered. Yolo!
+    sendall(csocket, rsp, rsp_len);
+    free(rsp);
+
     return CB_REMOVE_CLIENT;
 }
 
@@ -100,100 +84,80 @@ int proxy_request(server *srv, int csocket, packet *p, peer *n) {
  * @return int The callback status
  */
 int lookup_peer(uint16_t hash_id) {
-    // sendet PKT_FLAG_LKUP an successor mit hash_id und self (initialer kontakt) als payload
+    // We could see whether or not we need to repeat the lookup
 
-    if (peer_connect(succ) == 0) {
-        // socket of peer is n->socket
-        packet *packet = packet_new();
+    // build a new packet for the lookup
+    packet *lkp = packet_new();
+    lkp->flags = PKT_FLAG_CTRL | PKT_FLAG_LKUP;
+    lkp->hash_id = hash_id;
+    lkp->node_id = self->node_id;
+    lkp->node_port = self->port;
 
-        // set lookup and control flag
-        packet->flags = (PKT_FLAG_LKUP) + (PKT_FLAG_CTRL);
-        // set self identifiers in packet
-        packet->hash_id = hash_id;
-        packet->node_id = self->node_id;
-        packet->node_port = self->port;
-        packet->node_ip = peer_get_ip(self);
+    lkp->node_ip = peer_get_ip(self);
 
-        // send packet to peer
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(packet, &raw_size);
-        packet_free(packet);
-        sendall(succ->socket, raw_pkt, raw_size);
-
-        // disconnect from peer
-        peer_disconnect(succ);
-        return 0;
-    } else {
-        return -1;
-    }
+    forward(succ, lkp);
+    return 0;
 }
 
 /**
  * @brief Handle a client request we are resonspible for.
  *
- * @param srv The server
  * @param c The client
  * @param p The packet
  * @return int The callback status
  */
-int handle_own_request(server *srv, client *c, packet *p) {
-    // set delete oder get ausführen
-    // in hashtable nachschauen (ht)
-    // response an client zurückschicken (ACK FLAG)
+int handle_own_request(server* srv, client *c, packet *p) {
+    // build a new packet for the request
+    packet *rsp = packet_new();
 
-    packet *return_packet = packet_new();
+    if (p->flags & PKT_FLAG_GET) {
+        // this is a GET request
+        htable *entry = htable_get(ht, p->key, p->key_len);
+        if (entry != NULL) {
+            rsp->flags = PKT_FLAG_GET | PKT_FLAG_ACK;
 
-    //check if p is set get or delete request
-    if (p->flags & PKT_FLAG_SET) {
-        // set flag
-        htable_set(ht, p->key, p->key_len, p->value, p->value_len);
+            rsp->key = (unsigned char *)malloc(entry->key_len);
+            rsp->key_len = entry->key_len;
+            memcpy(rsp->key, entry->key, entry->key_len);
 
-        // set ACK and get flag
-        return_packet->flags = (PKT_FLAG_SET) + (PKT_FLAG_ACK);
-    } else if (p->flags & PKT_FLAG_GET) {
-        // get flag
-        htable *result = htable_get(ht, p->key, p->key_len);
-
-        if (result == NULL) {
-            // if result is NULL then no ACK flag
-            return_packet->flags = PKT_FLAG_GET;
+            rsp->value = (unsigned char *)malloc(entry->value_len);
+            rsp->value_len = entry->value_len;
+            memcpy(rsp->value, entry->value, entry->value_len);
         } else {
-            // if result has content then send SET and ACK flag + content
-            return_packet->flags = (PKT_FLAG_GET) + (PKT_FLAG_ACK);
-            return_packet->key = calloc(result->key_len, sizeof(unsigned char));
-            return_packet->key = memcpy(return_packet->key, result->key, result->key_len);
-            return_packet->key_len = result->key_len;
-            return_packet->value = calloc(result->value_len, sizeof(unsigned char));
-            return_packet->value = memcpy(return_packet->value, result->value, result->value_len);
-            return_packet->value_len = result->value_len;
+            rsp->flags = PKT_FLAG_GET;
+            rsp->key = (unsigned char *)malloc(p->key_len);
+            rsp->key_len = p->key_len;
+            memcpy(rsp->key, p->key, p->key_len);
         }
+    } else if (p->flags & PKT_FLAG_SET) {
+        // this is a SET request
+        rsp->flags = PKT_FLAG_SET | PKT_FLAG_ACK;
+        htable_set(ht, p->key, p->key_len, p->value, p->value_len);
     } else if (p->flags & PKT_FLAG_DEL) {
-        // delete flag
-
-        // delete key
+        // this is a DELETE request
         int status = htable_delete(ht, p->key, p->key_len);
 
         if (status == 0) {
-            // if delete succeeded send DEL and ACK flag
-            return_packet->flags = (PKT_FLAG_DEL) + (PKT_FLAG_ACK);
+            rsp->flags = PKT_FLAG_DEL | PKT_FLAG_ACK;
         } else {
-            // send only DEL flag if not succeeded
-            return_packet->flags = PKT_FLAG_DEL;
+            rsp->flags = PKT_FLAG_DEL;
         }
     } else {
-        // sollte nicht eintreten
-        htable_set(ht, p->key, p->key_len, p->value, p->value_len);
-
-        // set no flag
-        return_packet->flags = 0;
+        // send some default data
+        rsp->flags = p->flags | PKT_FLAG_ACK;
+        rsp->key = (unsigned char *)strdup("Rick Astley");
+        rsp->key_len = strlen((char *)rsp->key);
+        rsp->value = (unsigned char *)strdup("Never Gonna Give You Up!\n");
+        rsp->value_len = strlen((char *)rsp->value);
     }
 
-    size_t raw_size;
-    unsigned char *raw_pkt = packet_serialize(return_packet, &raw_size);
-    packet_free(return_packet);
-    sendall(c->socket, raw_pkt, raw_size);
+    size_t data_len;
+    unsigned char *raw = packet_serialize(rsp, &data_len);
+    free(rsp);
+    sendall(c->socket, raw, data_len);
+    free(raw);
+    raw = NULL;
 
-    server_close_socket(srv, c->socket);
     return CB_REMOVE_CLIENT;
 }
 
@@ -205,33 +169,32 @@ int handle_own_request(server *srv, client *c, packet *p) {
  * @return int The callback status
  */
 int answer_lookup(packet *p, peer *n) {
-    // schickt PKT_FLAG_RPLY an urspungs peer (in p: peer)
-    // mit peer (n) (ergebnis- aka verantwortlicher peer) als payload
+    peer *questioner = peer_from_packet(p);
 
-    // get peer from packet
-    peer *origin = peer_from_packet(p);
-
-    // connect to peer
-    if (peer_connect(origin) == 0) {
-        // create return packet
-        packet *ret_packet = packet_new();
-
-        // set RPLY and Control flag
-        ret_packet->flags = (PKT_FLAG_RPLY) + (PKT_FLAG_CTRL);
-        ret_packet->hash_id = p->hash_id;
-        ret_packet->node_id = n->node_id;
-        ret_packet->node_port = n->port;
-        ret_packet->node_ip = peer_get_ip(n);
-
-        // send packet to peer
-        size_t raw_size;
-        unsigned char *raw_pkt = packet_serialize(ret_packet, &raw_size);
-        packet_free(ret_packet);
-        sendall(origin->socket, raw_pkt, raw_size);
-
-        // disconnect from peer
-        peer_disconnect(origin);
+    // check whether we can connect to the peer
+    if (peer_connect(questioner) != 0) {
+        fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                questioner->hostname, questioner->port);
+        peer_free(questioner);
+        return CB_REMOVE_CLIENT;
     }
+
+    // build a new packet for the response
+    packet *rsp = packet_new();
+    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_RPLY;
+    rsp->hash_id = p->hash_id;
+    rsp->node_id = n->node_id;
+    rsp->node_port = n->port;
+    rsp->node_ip = peer_get_ip(n);
+
+    size_t data_len;
+    unsigned char *raw = packet_serialize(rsp, &data_len);
+    free(rsp);
+    sendall(questioner->socket, raw, data_len);
+    free(raw);
+    raw = NULL;
+    peer_disconnect(questioner);
+    peer_free(questioner);
     return CB_REMOVE_CLIENT;
 }
 
@@ -302,6 +265,12 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
         }
         clear_requests(rt, p->hash_id);
     } else {
+        /**
+         * TODO:
+         * Extend handled control messages.
+         * For the first task, this means that join-, stabilize-, and notify-messages should be understood.
+         * For the second task, finger- and f-ack-messages need to be used as well.
+         **/
     }
     return CB_REMOVE_CLIENT;
 }
@@ -327,16 +296,11 @@ int handle_packet(server *srv, client *c, packet *p) {
 /**
  * @brief Main entry for a peer of the chord ring.
  *
- * Requires 9 arguments:
- * 1. Id
- * 2. Hostname
- * 3. Port
- * 4. Id of the predecessor
- * 5. Hostname of the predecessor
- * 6. Port of the predecessor
- * 7. Id of the successor
- * 8. Hostname of the successor
- * 9. Port of the successor
+ * TODO:
+ * Modify usage of peer. Accept:
+ * 1. Own IP and port;
+ * 2. Own ID (optional, zero if not passed);
+ * 3. IP and port of Node in existing DHT. This is optional: If not passed, establish new DHT, otherwise join existing.
  *
  * @param argc The number of arguments
  * @param argv The arguments

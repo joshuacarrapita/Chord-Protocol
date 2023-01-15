@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.0)
-project (RN-Praxis2)
+project (RN-Praxis3)
 set (CMAKE_C_STANDARD 11)
 
 # Client
