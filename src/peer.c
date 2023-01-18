@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #include "hash_table.h"
 #include "neighbour.h"
@@ -17,6 +18,9 @@ rtable **rt = NULL;
 peer *self = NULL;
 peer *pred = NULL;
 peer *succ = NULL;
+
+char *hostPeer = NULL;
+char *portPeer = NULL;
 
 /**
  * @brief Forward a packet to a peer.
@@ -308,33 +312,47 @@ int handle_packet(server *srv, client *c, packet *p) {
  */
 int main(int argc, char **argv) {
 
-    if (argc < 10) {
-        fprintf(stderr, "Not enough args! I need ID IP PORT ID_P IP_P PORT_P "
-                        "ID_S IP_S PORT_S\n");
+    if (argc < 3) {
+        fprintf(stderr, "Not enough args! I need IP PORT [ID] [Peer-IP Peer-Port]\n");
     }
 
     // Read arguments for self
-    uint16_t idSelf = strtoul(argv[1], NULL, 10);
-    char *hostSelf = argv[2];
-    char *portSelf = argv[3];
+    char *hostSelf = argv[1];
+    char *portSelf = argv[2];
 
-    // Read arguments for predecessor
-    uint16_t idPred = strtoul(argv[4], NULL, 10);
-    char *hostPred = argv[5];
-    char *portPred = argv[6];
+    // check if less than 3 arguments
+    uint16_t idSelf;
+    if(argc > 3) {
+        // check if arg3 is Number -> id is set
+        bool idIsSet = true;
+        for (int i = 0; argv[3][i] != 0; i++) {
+            if (!isdigit(argv[3][i]))
+                idIsSet = false;
+        }
 
-    // Read arguments for successor
-    uint16_t idSucc = strtoul(argv[7], NULL, 10);
-    char *hostSucc = argv[8];
-    char *portSucc = argv[9];
+        int peerArgNum;
+        if (idIsSet) {
+            idSelf = strtoul(argv[3], NULL, 10);
+            peerArgNum = 4;
+        } else {
+            idSelf = 0;
+            peerArgNum = 3;
+        }
+
+        // Read arguments for existing peer (optional parameter)
+        if ((peerArgNum == 4 && argc >= 6) || (peerArgNum == 3 && argc >= 5)) {
+            hostPeer = argv[peerArgNum];
+            portPeer = argv[peerArgNum + 1];
+        }
+    }
+    else {
+        idSelf = 0;
+    }
 
     // Initialize all chord peers
     self = peer_init(
         idSelf, hostSelf,
         portSelf); //  Not really necessary but convenient to store us as a peer
-    pred = peer_init(idPred, hostPred, portPred); //
-
-    succ = peer_init(idSucc, hostSucc, portSucc);
 
     // Initialize outer server for communication with clients
     server *srv = server_setup(portSelf);
