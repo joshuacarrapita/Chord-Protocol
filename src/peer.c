@@ -277,9 +277,14 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
          **/
         if (p->flags & PKT_FLAG_JOIN) {
             if (pred == NULL || pred->node_id < p->node_id < self->node_id) {
-                // current peer is successor of new peer and answers with a Notify and its own data
+                // current peer is successor of new peer: updates its own predecessor
+                // and answers with a Notify and its own data
 
                 peer *new_node = peer_from_packet(p);
+                if (pred != NULL){
+                    peer_free(pred);
+                }
+                pred = new_node;
 
                 // check whether we can connect to the peer
                 if (peer_connect(new_node) != 0) {
@@ -303,13 +308,15 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 free(raw);
                 raw = NULL;
                 peer_disconnect(new_node);
-                peer_free(new_node);
             } else {
                 // current peer not responsible -> forward to next
                 forward(succ, p);
             }
         } else if (p->flags & PKT_FLAG_NTFY) {
             // set successor to peer in packet
+            if(succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
+                peer_free(succ);
+            }
             succ = peer_from_packet(p);
         } else if (p->flags & PKT_FLAG_STAB) {
             if (pred == NULL) {
