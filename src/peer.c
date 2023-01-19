@@ -22,6 +22,13 @@ peer *succ = NULL;
 char *hostPeer = NULL;
 char *portPeer = NULL;
 
+#define ft_len 16
+typedef struct _ftentry{
+    int start;
+    int successor;
+} ftentry ;
+ftentry fingertable [ft_len];
+
 /**
  * @brief Forward a packet to a peer.
  *
@@ -351,10 +358,49 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 peer_free(node);
             }
             // else do nothing. everything is ok
-        }
-
         // TODO: Finger Tables ...
+        } else if (p->flags & PKT_FLAG_FNGR) {
+            if(self->node_id){
+                // initialize finger table
+                for(int i = 0; i < ft_len; i++){
+                    ftentry new_entry;
+                    // calculate start value
+                    new_entry.start = (self->node_id + 2^(i)) % 2^(ft_len);
+                    // find successor for given start value
+                    new_entry.successor = lookup_peer(new_entry.start);
+                    // add result to finger table
+                    fingertable[i] = new_entry;
+                }
 
+                // send acknowledgement
+                peer* node = peer_from_packet(p);
+
+                // check whether we can connect to the peer
+                if (peer_connect(node) != 0) {
+                    fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                            node->hostname, node->port);
+                    peer_free(node);
+                    return CB_REMOVE_CLIENT;
+                }
+
+                // build a new packet for the response including id ip port of predecessor
+                packet *rsp = packet_new();
+                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
+                rsp->node_id = self->node_id;
+                rsp->node_port = self->port;
+                rsp->node_ip = peer_get_ip(self);
+
+                // send response
+                size_t data_len;
+                unsigned char *raw = packet_serialize(rsp, &data_len);
+                free(rsp);
+                sendall(node->socket, raw, data_len);
+                free(raw);
+                raw = NULL;
+                peer_disconnect(node);
+                peer_free(node);
+            }
+        }
     }
     return CB_REMOVE_CLIENT;
 }
