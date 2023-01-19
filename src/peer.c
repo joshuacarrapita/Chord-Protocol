@@ -281,10 +281,6 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 // and answers with a Notify and its own data
 
                 peer *new_node = peer_from_packet(p);
-                if (pred != NULL){
-                    peer_free(pred);
-                }
-                pred = new_node;
 
                 // check whether we can connect to the peer
                 if (peer_connect(new_node) != 0) {
@@ -293,6 +289,12 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     peer_free(new_node);
                     return CB_REMOVE_CLIENT;
                 }
+
+                // add new_node as own predecessor
+                if (pred != NULL){
+                    peer_free(pred);
+                }
+                pred = new_node;
 
                 // build a new packet for the response including own id ip port
                 packet *rsp = packet_new();
