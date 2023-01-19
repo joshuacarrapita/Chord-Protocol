@@ -275,6 +275,86 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
          * For the first task, this means that join-, stabilize-, and notify-messages should be understood.
          * For the second task, finger- and f-ack-messages need to be used as well.
          **/
+        if (p->flags & PKT_FLAG_JOIN) {
+            if (pred == NULL || pred->node_id < p->node_id < self->node_id) {
+                // current peer is successor of new peer: updates its own predecessor
+                // and answers with a Notify and its own data
+
+                peer *new_node = peer_from_packet(p);
+                if (pred != NULL){
+                    peer_free(pred);
+                }
+                pred = new_node;
+
+                // check whether we can connect to the peer
+                if (peer_connect(new_node) != 0) {
+                    fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                            new_node->hostname, new_node->port);
+                    peer_free(new_node);
+                    return CB_REMOVE_CLIENT;
+                }
+
+                // build a new packet for the response including own id ip port
+                packet *rsp = packet_new();
+                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
+                rsp->node_id = self->node_id;
+                rsp->node_port = self->port;
+                rsp->node_ip = peer_get_ip(self);
+
+                size_t data_len;
+                unsigned char *raw = packet_serialize(rsp, &data_len);
+                free(rsp);
+                sendall(new_node->socket, raw, data_len);
+                free(raw);
+                raw = NULL;
+                peer_disconnect(new_node);
+            } else {
+                // current peer not responsible -> forward to next
+                forward(succ, p);
+            }
+        } else if (p->flags & PKT_FLAG_NTFY) {
+            // set successor to peer in packet
+            if(succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
+                peer_free(succ);
+            }
+            succ = peer_from_packet(p);
+        } else if (p->flags & PKT_FLAG_STAB) {
+            if (pred == NULL) {
+                pred = peer_from_packet(p);
+            } else if (pred != NULL && p->node_id != pred->node_id) {
+                // current peer is not successor of origin anymore and sends new successor back
+
+                peer *node = peer_from_packet(p);
+
+                // check whether we can connect to the peer
+                if (peer_connect(node) != 0) {
+                    fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                            node->hostname, node->port);
+                    peer_free(node);
+                    return CB_REMOVE_CLIENT;
+                }
+
+                // build a new packet for the response including id ip port of predecessor
+                packet *rsp = packet_new();
+                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
+                rsp->node_id = pred->node_id;
+                rsp->node_port = pred->port;
+                rsp->node_ip = peer_get_ip(pred);
+
+                size_t data_len;
+                unsigned char *raw = packet_serialize(rsp, &data_len);
+                free(rsp);
+                sendall(node->socket, raw, data_len);
+                free(raw);
+                raw = NULL;
+                peer_disconnect(node);
+                peer_free(node);
+            }
+            // else do nothing. everything is ok
+        }
+
+        // TODO: Finger Tables ...
+
     }
     return CB_REMOVE_CLIENT;
 }
