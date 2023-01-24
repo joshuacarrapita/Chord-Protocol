@@ -160,7 +160,6 @@ void server_run(server *srv) {
         }
 
         if (srv->packet_cb != NULL) {
-            fprintf(stderr, "Stabilize %lu\n", (unsigned long)time(NULL));
             packet *rsp = packet_new();
             rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_STAB | PKT_FLAG_NTFY;
             srv->packet_cb(srv, c, rsp);
