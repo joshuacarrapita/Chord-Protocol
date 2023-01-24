@@ -319,11 +319,17 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             if(succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
                 peer_free(succ);
             }
-            succ = peer_from_packet(p);
+            peer* p_from_packet = peer_from_packet(p);
+            if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                succ = p_from_packet;
+            }
         } else if (p->flags & PKT_FLAG_STAB) {
             if (pred == NULL) {
-                pred = peer_from_packet(p);
-            } else if (pred != NULL && p->node_id != pred->node_id) {
+                peer* p_from_packet = peer_from_packet(p);
+                if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                    pred = p_from_packet;
+                }
+            } else if (p->node_id != pred->node_id) {
                 // current peer is not successor of origin anymore and sends new successor back
 
                 peer *node = peer_from_packet(p);
