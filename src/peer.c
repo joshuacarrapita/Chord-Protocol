@@ -25,8 +25,9 @@ char *portPeer = NULL;
 #define ft_len 16
 typedef struct _ftentry{
     int start;
-    int successor;
+    peer* successor;
 } ftentry ;
+packet* ftlkppeer = NULL;
 ftentry fingertable [ft_len];
 bool ftset = false;
 
@@ -265,7 +266,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             return answer_lookup(p, succ);
         } else {
             // Great! Somebody else's job!
-            // if there is a fingertable, let's do a more efficient lookup
+            // If there is a fingertable, let's do a more efficient lookup
             if(ftset){
                 for (int i = ft_len-1; i >= 0; i--){
                    if(fingertable[i].start < p->hash_id){
@@ -279,6 +280,12 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
         }
     } else if (p->flags & PKT_FLAG_RPLY) {
         // Look for open requests and proxy them
+
+        // Save reply packet in ftlkppeer
+        packet_free(ftlkppeer);
+        ftlkppeer = NULL;
+        ftlkppeer = packet_dup(p);
+
         peer *n = peer_from_packet(p);
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
              r = r->next) {
@@ -376,12 +383,24 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 ftset = false;
                 for(int i = 0; i < ft_len; i++){
                     ftentry new_entry;
+
                     // calculate start value
                     new_entry.start = (self->node_id + 2^(i)) % 2^(ft_len);
+
                     // find successor for given start value
-                    new_entry.successor = lookup_peer(new_entry.start);
-                    // add result to finger table
-                    fingertable[i] = new_entry;
+                    packet_free(ftlkppeer); // clear previously found ftlkppeer
+                    ftlkppeer = NULL;
+
+                    lookup_peer(new_entry.start); // look up responsible peer for hash ID 'new_entry.start'
+                    while(!ftlkppeer){ // wait until result is set
+                        sleep(1);
+                    }
+                    new_entry.successor = peer_from_packet(ftlkppeer); // once there is a result save it as the successor
+
+                    packet_free(ftlkppeer);
+                    ftlkppeer = NULL;
+
+                    fingertable[i] = new_entry; // all done, add entry to fingertable!
                 }
                 ftset = true;
 
