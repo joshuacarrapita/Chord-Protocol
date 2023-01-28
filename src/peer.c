@@ -28,6 +28,7 @@ typedef struct _ftentry{
     int successor;
 } ftentry ;
 ftentry fingertable [ft_len];
+bool ftset = false;
 
 /**
  * @brief Forward a packet to a peer.
@@ -264,7 +265,17 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             return answer_lookup(p, succ);
         } else {
             // Great! Somebody else's job!
-            forward(succ, p);
+            // if there is a fingertable, let's do a more efficient lookup
+            if(ftset){
+                for (int i = ft_len-1; i >= 0; i--){
+                   if(fingertable[i].start < p->hash_id){
+                       forward(fingertable[i].successor, p);
+                       i = -1;
+                   }
+                }
+            } else {
+                forward(succ, p);
+            }
         }
     } else if (p->flags & PKT_FLAG_RPLY) {
         // Look for open requests and proxy them
@@ -362,6 +373,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
         } else if (p->flags & PKT_FLAG_FNGR) {
             if(self->node_id){
                 // initialize finger table
+                ftset = false;
                 for(int i = 0; i < ft_len; i++){
                     ftentry new_entry;
                     // calculate start value
@@ -371,6 +383,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     // add result to finger table
                     fingertable[i] = new_entry;
                 }
+                ftset = true;
 
                 // send acknowledgement
                 peer* node = peer_from_packet(p);
