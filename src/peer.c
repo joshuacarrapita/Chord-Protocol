@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <math.h>
 
 #include "hash_table.h"
 #include "neighbour.h"
@@ -385,7 +386,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     ftentry new_entry;
 
                     // calculate start value
-                    new_entry.start = (self->node_id + 2^(i)) % 2^(ft_len);
+                    new_entry.start = (int)(self->node_id + pow(2, i)) % (int) pow(2, ft_len);                     
 
                     // find successor for given start value
                     packet_free(ftlkppeer); // clear previously found ftlkppeer
