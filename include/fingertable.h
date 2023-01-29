@@ -9,7 +9,7 @@ typedef struct _ftentry{
 
 int ft_forward_closest_pred(ftentry* fngrtable, int fngrtable_len, packet* pack);
 
-void ft_clear_fngrtable(ftentry* fngrtable, int fngrtable_len);
+void ft_clear_fingertable(ftentry* fngrtable, int fngrtable_len);
 
 void ftentry_free(ftentry entry);
 

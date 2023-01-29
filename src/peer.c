@@ -215,7 +215,7 @@ int answer_lookup(packet *p, peer *n) {
  * @param p The answering peer
  * @return int The callback status
  */
-int answer_fngrtable_init(packet* pack, peer *p){
+int answer_fingertable_init(packet* pack, peer *p){
     peer* node = peer_from_packet(pack);
 
     // check whether we can connect to the peer
@@ -407,14 +407,14 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
     } else if (p->flags & PKT_FLAG_FNGR) { // initialize finger table
         if(self->node_id){
             // Clear old fingertable and free memory
-            ft_clear_fngrtable(ftable, ft_len);
+            ft_clear_fingertable(ftable, ft_len);
 
             // Update entries
             ftset = ft_update_entries(ftable, ft_len, self);
 
             // Send acknowledgment
             if(ftset){
-                answer_fngrtable_init(p, self);
+                answer_fingertable_init(p, self);
             }
         }
     }

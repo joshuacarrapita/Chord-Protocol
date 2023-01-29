@@ -24,7 +24,7 @@ int ft_forward_closest_pred(ftentry* fngrtable, int fngrtable_len, packet* pack)
  * @param fngrtable  The fingertable to be cleared
  * @param fngrtable_len The length of the given fingertable
  */
-void ft_clear_fngrtable(ftentry* fngrtable, int fngrtable_len){
+void ft_clear_fingertable(ftentry* fngrtable, int fngrtable_len){
     for (int i = 0; i < fngrtable_len; i++){
         ftentry_free(fngrtable[i]);
         fngrtable[i].start = 0;
