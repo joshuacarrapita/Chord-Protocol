@@ -2,7 +2,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <math.h>
 
 #include "hash_table.h"
 #include "neighbour.h"
@@ -10,6 +9,7 @@
 #include "requests.h"
 #include "server.h"
 #include "util.h"
+#include "fingertable.h"
 
 // actual underlying hash table
 htable **ht = NULL;
@@ -23,13 +23,9 @@ peer *succ = NULL;
 char *hostPeer = NULL;
 char *portPeer = NULL;
 
-#define ft_len 16
-typedef struct _ftentry{
-    int start;
-    peer* successor;
-} ftentry ;
+// fingertable
 packet* ftlkppeer = NULL;
-ftentry fingertable [ft_len];
+ftentry ftable [ft_len];
 bool ftset = false;
 
 /**
@@ -213,6 +209,42 @@ int answer_lookup(packet *p, peer *n) {
 }
 
 /**
+ * @brief Answer a fingertable initialisation request with an acknowledgement.
+ *
+ * @param pack The packet containing info about the peer to reply to
+ * @param p The answering peer
+ * @return int The callback status
+ */
+int answer_fngrtable_init(packet* pack, peer *p){
+    peer* node = peer_from_packet(pack);
+
+    // check whether we can connect to the peer
+    if (peer_connect(node) != 0) {
+        fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                node->hostname, node->port);
+        peer_free(node);
+        return CB_REMOVE_CLIENT;
+    }
+
+    // build a new packet for the response
+    packet *rsp = packet_new();
+    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
+    rsp->node_id = self->node_id;
+    rsp->node_port = self->port;
+    rsp->node_ip = peer_get_ip(self);
+
+    // send response
+    size_t data_len;
+    unsigned char *raw = packet_serialize(rsp, &data_len);
+    free(rsp);
+    sendall(node->socket, raw, data_len);
+    free(raw);
+    raw = NULL;
+    peer_disconnect(node);
+    peer_free(node);
+}
+
+/**
  * @brief Handle a key request request from a client.
  *
  * @param srv The server
@@ -267,14 +299,9 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             return answer_lookup(p, succ);
         } else {
             // Great! Somebody else's job!
-            // If there is a fingertable, let's do a more efficient lookup
             if(ftset){
-                for (int i = ft_len-1; i >= 0; i--){
-                   if(fingertable[i].start < p->hash_id){
-                       forward(fingertable[i].successor, p);
-                       i = -1;
-                   }
-                }
+                // If there is a fingertable, let's do a more efficient lookup
+                ft_forward_closest_pred(ftable, ft_len, p);
             } else {
                 forward(succ, p);
             }
@@ -282,10 +309,11 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
     } else if (p->flags & PKT_FLAG_RPLY) {
         // Look for open requests and proxy them
 
-        // Save reply packet in ftlkppeer
-        packet_free(ftlkppeer);
-        ftlkppeer = NULL;
-        ftlkppeer = packet_dup(p);
+        /*
+         * First forward reply to self in case it was for a fingertable initialisation (could add a case distinction here
+         * if bugs are caused due to request proxying even though we only wanted fingertable init)
+         */
+        forward(self, p);
 
         peer *n = peer_from_packet(p);
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
@@ -294,14 +322,13 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             server_close_socket(srv, r->socket);
         }
         clear_requests(rt, p->hash_id);
-    } else {
-        /**
+      /**
          * TODO:
          * Extend handled control messages.
          * For the first task, this means that join-, stabilize-, and notify-messages should be understood.
          * For the second task, finger- and f-ack-messages need to be used as well.
-         **/
-        if (p->flags & PKT_FLAG_JOIN) {
+        **/
+    } else if (p->flags & PKT_FLAG_JOIN) {
             if (pred == NULL || pred->node_id < p->node_id < self->node_id) {
                 // current peer is successor of new peer: updates its own predecessor
                 // and answers with a Notify and its own data
@@ -338,103 +365,60 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 // current peer not responsible -> forward to next
                 forward(succ, p);
             }
-        } else if (p->flags & PKT_FLAG_NTFY) {
-            // set successor to peer in packet
-            if(succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
-                peer_free(succ);
-            }
-            succ = peer_from_packet(p);
-        } else if (p->flags & PKT_FLAG_STAB) {
-            if (pred == NULL) {
-                pred = peer_from_packet(p);
-            } else if (pred != NULL && p->node_id != pred->node_id) {
-                // current peer is not successor of origin anymore and sends new successor back
+    } else if (p->flags & PKT_FLAG_NTFY) {
+        // set successor to peer in packet
+        if(succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
+            peer_free(succ);
+        }
+        succ = peer_from_packet(p);
+    } else if (p->flags & PKT_FLAG_STAB) {
+        if (pred == NULL) {
+            pred = peer_from_packet(p);
+        } else if (pred != NULL && p->node_id != pred->node_id) {
+            // current peer is not successor of origin anymore and sends new successor back
 
-                peer *node = peer_from_packet(p);
+            peer *node = peer_from_packet(p);
 
-                // check whether we can connect to the peer
-                if (peer_connect(node) != 0) {
-                    fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
-                            node->hostname, node->port);
-                    peer_free(node);
-                    return CB_REMOVE_CLIENT;
-                }
-
-                // build a new packet for the response including id ip port of predecessor
-                packet *rsp = packet_new();
-                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
-                rsp->node_id = pred->node_id;
-                rsp->node_port = pred->port;
-                rsp->node_ip = peer_get_ip(pred);
-
-                size_t data_len;
-                unsigned char *raw = packet_serialize(rsp, &data_len);
-                free(rsp);
-                sendall(node->socket, raw, data_len);
-                free(raw);
-                raw = NULL;
-                peer_disconnect(node);
+            // check whether we can connect to the peer
+            if (peer_connect(node) != 0) {
+                fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                        node->hostname, node->port);
                 peer_free(node);
+                return CB_REMOVE_CLIENT;
             }
-            // else do nothing. everything is ok
+
+            // build a new packet for the response including id ip port of predecessor
+            packet *rsp = packet_new();
+            rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
+            rsp->node_id = pred->node_id;
+            rsp->node_port = pred->port;
+            rsp->node_ip = peer_get_ip(pred);
+
+            size_t data_len;
+            unsigned char *raw = packet_serialize(rsp, &data_len);
+            free(rsp);
+            sendall(node->socket, raw, data_len);
+            free(raw);
+            raw = NULL;
+            peer_disconnect(node);
+            peer_free(node);
+        }
         // TODO: Finger Tables ...
-        } else if (p->flags & PKT_FLAG_FNGR) {
-            if(self->node_id){
-                // initialize finger table
-                ftset = false;
-                for(int i = 0; i < ft_len; i++){
-                    ftentry new_entry;
+    } else if (p->flags & PKT_FLAG_FNGR) { // initialize finger table
+        if(self->node_id){
+            // Clear old fingertable and free memory
+            ft_clear_fngrtable(ftable, ft_len);
 
-                    // calculate start value
-                    new_entry.start = (int)(self->node_id + pow(2, i)) % (int) pow(2, ft_len);                     
+            // Update entries
+            ftset = ft_update_entries(ftable, ft_len, self);
 
-                    // find successor for given start value
-                    packet_free(ftlkppeer); // clear previously found ftlkppeer
-                    ftlkppeer = NULL;
-
-                    lookup_peer(new_entry.start); // look up responsible peer for hash ID 'new_entry.start'
-                    while(!ftlkppeer){ // wait until result is set
-                        sleep(1);
-                    }
-                    new_entry.successor = peer_from_packet(ftlkppeer); // once there is a result save it as the successor
-
-                    packet_free(ftlkppeer);
-                    ftlkppeer = NULL;
-
-                    fingertable[i] = new_entry; // all done, add entry to fingertable!
-                }
-                ftset = true;
-
-                // send acknowledgement
-                peer* node = peer_from_packet(p);
-
-                // check whether we can connect to the peer
-                if (peer_connect(node) != 0) {
-                    fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
-                            node->hostname, node->port);
-                    peer_free(node);
-                    return CB_REMOVE_CLIENT;
-                }
-
-                // build a new packet for the response including id ip port of predecessor
-                packet *rsp = packet_new();
-                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
-                rsp->node_id = self->node_id;
-                rsp->node_port = self->port;
-                rsp->node_ip = peer_get_ip(self);
-
-                // send response
-                size_t data_len;
-                unsigned char *raw = packet_serialize(rsp, &data_len);
-                free(rsp);
-                sendall(node->socket, raw, data_len);
-                free(raw);
-                raw = NULL;
-                peer_disconnect(node);
-                peer_free(node);
+            // Send acknowledgment
+            if(ftset){
+                answer_fngrtable_init(p, self);
             }
         }
     }
+    // else do nothing. everything is ok
     return CB_REMOVE_CLIENT;
 }
 
