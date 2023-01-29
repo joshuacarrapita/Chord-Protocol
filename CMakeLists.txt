@@ -13,6 +13,7 @@ add_executable(peer src/peer.c src/server.c src/packet.c src/util.c src/hash_tab
 target_include_directories(peer PRIVATE include)
 set_target_properties(peer PROPERTIES OUTPUT_NAME "peer")
 target_compile_options (peer PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(peer PRIVATE m)
 
 # Packaging
 set(CPACK_SOURCE_GENERATOR "TGZ")
