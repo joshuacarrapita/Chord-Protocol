@@ -125,6 +125,15 @@ void server_run(server *srv) {
     srv->active = true;
     fprintf(stderr, "Starting server. Press any key to exit.\n");
 
+    // TODO: send msg to handle_packet_ctrl() to start JOIN process
+    if (srv->packet_cb != NULL) {
+        client* c = NULL;
+        packet *rsp = packet_new();
+        rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_JOIN | PKT_FLAG_NTFY;
+        srv->packet_cb(srv, c, rsp);
+        free(rsp);
+    }
+
     struct pollfd *fds = NULL;
     int i, ready;
     while (srv->active) {
@@ -144,10 +153,17 @@ void server_run(server *srv) {
             fds[i].events = POLLIN;
         }
 
-        ready = poll(fds, srv->n_clients + 2, 5000);
+        ready = poll(fds, srv->n_clients + 2, 1900);
         if (ready < 0) {
             perror("Poll:");
             break;
+        }
+
+        if (srv->packet_cb != NULL) {
+            packet *rsp = packet_new();
+            rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_STAB | PKT_FLAG_NTFY;
+            srv->packet_cb(srv, c, rsp);
+            free(rsp);
         }
 
         if (ready > 0) {
