@@ -339,7 +339,37 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
             // Normal incoming CTRL Packages
             if (p->flags & PKT_FLAG_JOIN) {
-                if (pred == NULL || pred->node_id < p->node_id < self->node_id) {
+                if(pred == NULL && succ == NULL) {
+                    peer *new_node = peer_from_packet(p);
+                    peer *new_node2 = peer_from_packet(p);
+
+                    succ = new_node;
+                    pred = new_node2;
+
+                    // check whether we can connect to the peer
+                    if (peer_connect(new_node) != 0) {
+                        fprintf(stderr, "Could not connect to questioner of join at %s:%d\n!",
+                                new_node->hostname, new_node->port);
+                        peer_free(new_node);
+                        return CB_REMOVE_CLIENT;
+                    }
+
+                    // build a new packet for the response including own id ip port
+                    packet *rsp = packet_new();
+                    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
+                    rsp->node_id = self->node_id;
+                    rsp->node_port = self->port;
+                    rsp->node_ip = peer_get_ip(self);
+
+                    size_t data_len;
+                    unsigned char *raw = packet_serialize(rsp, &data_len);
+                    free(rsp);
+                    sendall(new_node->socket, raw, data_len);
+                    free(raw);
+                    raw = NULL;
+                    peer_disconnect(new_node);
+                }
+                else if (pred != NULL && peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
                     // current peer is successor of new peer: updates its own predecessor
                     // and answers with a Notify and its own data
 
