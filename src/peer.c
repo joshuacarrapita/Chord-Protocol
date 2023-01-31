@@ -243,10 +243,9 @@ int handle_packet_data(server *srv, client *c, packet *p) {
  * @return int The callback status
  */
 int handle_packet_ctrl(server *srv, client *c, packet *p) {
-
-    fprintf(stderr, "Handling control packet...\n");
-
     if (p->flags & PKT_FLAG_LKUP) {
+        fprintf(stderr, "Handling control packet...\n");
+
         // we received a lookup request
         if (peer_is_responsible(pred->node_id, self->node_id, p->hash_id)) {
             // Our business
@@ -260,6 +259,8 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             forward(succ, p);
         }
     } else if (p->flags & PKT_FLAG_RPLY) {
+        fprintf(stderr, "Handling control packet...\n");
+
         // Look for open requests and proxy them
         peer *n = peer_from_packet(p);
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
@@ -275,79 +276,28 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
          * For the first task, this means that join-, stabilize-, and notify-messages should be understood.
          * For the second task, finger- and f-ack-messages need to be used as well.
          **/
-        if (p->flags & PKT_FLAG_JOIN) {
-            if (pred == NULL || pred->node_id < p->node_id < self->node_id) {
-                // current peer is successor of new peer: updates its own predecessor
-                // and answers with a Notify and its own data
 
-                peer *new_node = peer_from_packet(p);
-
-                // check whether we can connect to the peer
-                if (peer_connect(new_node) != 0) {
-                    fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
-                            new_node->hostname, new_node->port);
-                    peer_free(new_node);
-                    return CB_REMOVE_CLIENT;
-                }
-
-                // add new_node as own predecessor
-                if (pred != NULL){
-                    peer_free(pred);
-                }
-                pred = new_node;
-
-                // build a new packet for the response including own id ip port
-                packet *rsp = packet_new();
-                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
-                rsp->node_id = self->node_id;
-                rsp->node_port = self->port;
-                rsp->node_ip = peer_get_ip(self);
-
-                size_t data_len;
-                unsigned char *raw = packet_serialize(rsp, &data_len);
-                free(rsp);
-                sendall(new_node->socket, raw, data_len);
-                free(raw);
-                raw = NULL;
-                peer_disconnect(new_node);
-            } else {
-                // current peer not responsible -> forward to next
-                forward(succ, p);
-            }
-        } else if (p->flags & PKT_FLAG_NTFY) {
-            // set successor to peer in packet
-            if(succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
-                peer_free(succ);
-            }
-            peer* p_from_packet = peer_from_packet(p);
-            if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
-                succ = p_from_packet;
-            }
-        } else if (p->flags & PKT_FLAG_STAB) {
-            if (pred == NULL) {
-                peer* p_from_packet = peer_from_packet(p);
-                if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
-                    pred = p_from_packet;
-                }
-            } else if (p->node_id != pred->node_id) {
-                // current peer is not successor of origin anymore and sends new successor back
-
-                peer *node = peer_from_packet(p);
+        // Send Join Msg to node in chord ring
+        if (p->flags & PKT_FLAG_JOIN && p->flags & PKT_FLAG_NTFY) {
+            if(hostPeer != NULL && portPeer != NULL) {
+                peer *node = peer_init(
+                        0, hostPeer,
+                        portPeer);
 
                 // check whether we can connect to the peer
                 if (peer_connect(node) != 0) {
-                    fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                    fprintf(stderr, "Could not connect to peer of lookup at %s:%d\n!",
                             node->hostname, node->port);
                     peer_free(node);
                     return CB_REMOVE_CLIENT;
                 }
 
-                // build a new packet for the response including id ip port of predecessor
+                // build a new packet including own id ip port
                 packet *rsp = packet_new();
-                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
-                rsp->node_id = pred->node_id;
-                rsp->node_port = pred->port;
-                rsp->node_ip = peer_get_ip(pred);
+                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_JOIN;
+                rsp->node_id = self->node_id;
+                rsp->node_port = self->port;
+                rsp->node_ip = peer_get_ip(self);
 
                 size_t data_len;
                 unsigned char *raw = packet_serialize(rsp, &data_len);
@@ -358,7 +308,151 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 peer_disconnect(node);
                 peer_free(node);
             }
-            // else do nothing. everything is ok
+        }
+        // Send Stabilize Msg to successor
+        else if (p->flags & PKT_FLAG_STAB && p->flags & PKT_FLAG_NTFY) {
+            if(succ != NULL) {
+                // check whether we can connect to the peer
+                if (peer_connect(succ) != 0) {
+                    fprintf(stderr, "Could not connect to peer of lookup at %s:%d\n!",
+                            succ->hostname, succ->port);
+                    return CB_REMOVE_CLIENT;
+                }
+
+                // build a new packet including own id ip port
+                packet *rsp = packet_new();
+                rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_STAB;
+                rsp->node_id = self->node_id;
+                rsp->node_port = self->port;
+                rsp->node_ip = peer_get_ip(self);
+
+                size_t data_len;
+                unsigned char *raw = packet_serialize(rsp, &data_len);
+                free(rsp);
+                sendall(succ->socket, raw, data_len);
+                free(raw);
+                raw = NULL;
+                peer_disconnect(succ);
+            }
+        } else {
+            fprintf(stderr, "Handling control packet...\n");
+
+            // Normal incoming CTRL Packages
+            if (p->flags & PKT_FLAG_JOIN) {
+                if(pred == NULL && succ == NULL) {
+                    peer *new_node = peer_from_packet(p);
+                    peer *new_node2 = peer_from_packet(p);
+
+                    succ = new_node;
+                    pred = new_node2;
+
+                    // check whether we can connect to the peer
+                    if (peer_connect(new_node) != 0) {
+                        fprintf(stderr, "Could not connect to questioner of join at %s:%d\n!",
+                                new_node->hostname, new_node->port);
+                        peer_free(new_node);
+                        return CB_REMOVE_CLIENT;
+                    }
+
+                    // build a new packet for the response including own id ip port
+                    packet *rsp = packet_new();
+                    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
+                    rsp->node_id = self->node_id;
+                    rsp->node_port = self->port;
+                    rsp->node_ip = peer_get_ip(self);
+
+                    size_t data_len;
+                    unsigned char *raw = packet_serialize(rsp, &data_len);
+                    free(rsp);
+                    sendall(new_node->socket, raw, data_len);
+                    free(raw);
+                    raw = NULL;
+                    peer_disconnect(new_node);
+                }
+                else if (pred != NULL && peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
+                    // current peer is successor of new peer: updates its own predecessor
+                    // and answers with a Notify and its own data
+
+                    peer *new_node = peer_from_packet(p);
+
+                    // check whether we can connect to the peer
+                    if (peer_connect(new_node) != 0) {
+                        fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                                new_node->hostname, new_node->port);
+                        peer_free(new_node);
+                        return CB_REMOVE_CLIENT;
+                    }
+
+                    // add new_node as own predecessor
+                    if (pred != NULL) {
+                        peer_free(pred);
+                    }
+                    pred = new_node;
+
+                    // build a new packet for the response including own id ip port
+                    packet *rsp = packet_new();
+                    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
+                    rsp->node_id = self->node_id;
+                    rsp->node_port = self->port;
+                    rsp->node_ip = peer_get_ip(self);
+
+                    size_t data_len;
+                    unsigned char *raw = packet_serialize(rsp, &data_len);
+                    free(rsp);
+                    sendall(new_node->socket, raw, data_len);
+                    free(raw);
+                    raw = NULL;
+                    peer_disconnect(new_node);
+                } else {
+                    // current peer not responsible -> forward to next
+                    forward(succ, p);
+                }
+            } else if (p->flags & PKT_FLAG_NTFY) {
+                // set successor to peer in packet
+                if (succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
+                    peer_free(succ);
+                }
+                peer* p_from_packet = peer_from_packet(p);
+                if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                    succ = p_from_packet;
+                }
+            } else if (p->flags & PKT_FLAG_STAB) {
+                if (pred == NULL) {
+                    peer* p_from_packet = peer_from_packet(p);
+                    if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                        pred = p_from_packet;
+                    }
+                } else if (p->node_id != pred->node_id) {
+                    // current peer is not successor of origin anymore and sends new successor back
+
+                    peer *node = peer_from_packet(p);
+
+                    // check whether we can connect to the peer
+                    if (peer_connect(node) != 0) {
+                        fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                                node->hostname, node->port);
+                        peer_free(node);
+                        return CB_REMOVE_CLIENT;
+                    }
+
+                    // build a new packet for the response including id ip port of predecessor
+                    packet *rsp = packet_new();
+                    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_NTFY;
+                    rsp->node_id = pred->node_id;
+                    rsp->node_port = pred->port;
+                    rsp->node_ip = peer_get_ip(pred);
+
+                    size_t data_len;
+                    unsigned char *raw = packet_serialize(rsp, &data_len);
+                    free(rsp);
+                    sendall(node->socket, raw, data_len);
+                    free(raw);
+                    raw = NULL;
+                    peer_disconnect(node);
+                    peer_free(node);
+                }
+                // else do nothing. everything is ok
+            }
         }
 
         // TODO: Finger Tables ...

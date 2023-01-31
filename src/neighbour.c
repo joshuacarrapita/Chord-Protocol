@@ -47,6 +47,7 @@ peer *peer_from_packet(const packet *pack) {
 
     p->hostname = fakehostname;
     p->port = pack->node_port;
+    p->node_id = pack->node_id;
     return p;
 }
 
