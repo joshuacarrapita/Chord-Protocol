@@ -1,6 +1,12 @@
-#include "peer.c"
+//
+#include "peer.h"
+#include <stdbool.h>
+#include <stdio.h>
+
 #include "packet.h"
 #include "math.h"
+#include "fingertable.h"
+#include "util.h"
 
 /**
  * @brief Forward a packet to the closest predecessor to given hash_id in packet that is saved in the passed fingertable.

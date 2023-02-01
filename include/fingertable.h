@@ -1,3 +1,5 @@
+#pragma once
+
 #include "neighbour.h"
 
 #define ft_len 16

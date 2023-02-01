@@ -215,7 +215,7 @@ int answer_lookup(packet *p, peer *n) {
  * @param p The answering peer
  * @return int The callback status
  */
-int answer_fingertable_init(packet* pack, peer *p){
+void answer_fingertable_init(packet* pack, peer *p){
     peer* node = peer_from_packet(pack);
 
     // check whether we can connect to the peer
@@ -223,15 +223,14 @@ int answer_fingertable_init(packet* pack, peer *p){
         fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
                 node->hostname, node->port);
         peer_free(node);
-        return CB_REMOVE_CLIENT;
     }
 
     // build a new packet for the response
     packet *rsp = packet_new();
     rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
-    rsp->node_id = self->node_id;
-    rsp->node_port = self->port;
-    rsp->node_ip = peer_get_ip(self);
+    rsp->node_id = p->node_id;
+    rsp->node_port = p->port;
+    rsp->node_ip = peer_get_ip(p);
 
     // send response
     size_t data_len;
