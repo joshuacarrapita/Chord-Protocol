@@ -171,6 +171,9 @@ void server_run(server *srv) {
                 break;
             }
 
+            // TODO: send msg to handle_packet_ctrl() to start JOIN process
+            // TODO: where exactly? send msg to handle_packet_ctrl() to start STABILIZE process in 2 second interval
+
             client *next;
             for (i = 2, c = srv->clients;
                  (i < srv->n_clients + 2) && (c != NULL); i++, c = next) {

@@ -9,6 +9,7 @@
 #include "requests.h"
 #include "server.h"
 #include "util.h"
+#include "fingertable.h"
 
 // actual underlying hash table
 htable **ht = NULL;
@@ -21,6 +22,11 @@ peer *succ = NULL;
 
 char *hostPeer = NULL;
 char *portPeer = NULL;
+
+// fingertable
+packet* ftlkppeer = NULL;
+ftentry ftable [ft_len];
+bool ftset = false;
 
 /**
  * @brief Forward a packet to a peer.
@@ -203,6 +209,41 @@ int answer_lookup(packet *p, peer *n) {
 }
 
 /**
+ * @brief Answer a fingertable initialisation request with an acknowledgement.
+ *
+ * @param pack The packet containing info about the peer to reply to
+ * @param p The answering peer
+ * @return int The callback status
+ */
+void answer_fingertable_init(packet* pack, peer *p){
+    peer* node = peer_from_packet(pack);
+
+    // check whether we can connect to the peer
+    if (peer_connect(node) != 0) {
+        fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
+                node->hostname, node->port);
+        peer_free(node);
+    }
+
+    // build a new packet for the response
+    packet *rsp = packet_new();
+    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
+    rsp->node_id = p->node_id;
+    rsp->node_port = p->port;
+    rsp->node_ip = peer_get_ip(p);
+
+    // send response
+    size_t data_len;
+    unsigned char *raw = packet_serialize(rsp, &data_len);
+    free(rsp);
+    sendall(node->socket, raw, data_len);
+    free(raw);
+    raw = NULL;
+    peer_disconnect(node);
+    peer_free(node);
+}
+
+/**
  * @brief Handle a key request request from a client.
  *
  * @param srv The server
@@ -256,12 +297,24 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             return answer_lookup(p, succ);
         } else {
             // Great! Somebody else's job!
-            forward(succ, p);
+            if(ftset){
+                // If there is a fingertable, let's do a more efficient lookup
+                ft_forward_closest_pred(ftable, ft_len, p);
+            } else {
+                forward(succ, p);
+            }
         }
     } else if (p->flags & PKT_FLAG_RPLY) {
         fprintf(stderr, "Handling control packet...\n");
 
         // Look for open requests and proxy them
+
+        /*
+         * First forward reply to self in case it was for a fingertable initialisation (could add a case distinction here
+         * if bugs are caused due to request proxying even though we only wanted fingertable init)
+         */
+        forward(self, p);
+
         peer *n = peer_from_packet(p);
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
              r = r->next) {
@@ -279,7 +332,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
         // Send Join Msg to node in chord ring
         if (p->flags & PKT_FLAG_JOIN && p->flags & PKT_FLAG_NTFY) {
-            if(hostPeer != NULL && portPeer != NULL) {
+            if (hostPeer != NULL && portPeer != NULL) {
                 peer *node = peer_init(
                         0, hostPeer,
                         portPeer);
@@ -309,9 +362,9 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 peer_free(node);
             }
         }
-        // Send Stabilize Msg to successor
+            // Send Stabilize Msg to successor
         else if (p->flags & PKT_FLAG_STAB && p->flags & PKT_FLAG_NTFY) {
-            if(succ != NULL) {
+            if (succ != NULL) {
                 // check whether we can connect to the peer
                 if (peer_connect(succ) != 0) {
                     fprintf(stderr, "Could not connect to peer of lookup at %s:%d\n!",
@@ -339,7 +392,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
             // Normal incoming CTRL Packages
             if (p->flags & PKT_FLAG_JOIN) {
-                if(pred == NULL && succ == NULL) {
+                if (pred == NULL && succ == NULL) {
                     peer *new_node = peer_from_packet(p);
                     peer *new_node2 = peer_from_packet(p);
 
@@ -368,8 +421,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     free(raw);
                     raw = NULL;
                     peer_disconnect(new_node);
-                }
-                else if (pred != NULL && peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
+                } else if (pred != NULL && peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
                     // current peer is successor of new peer: updates its own predecessor
                     // and answers with a Notify and its own data
 
@@ -412,14 +464,14 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 if (succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
                     peer_free(succ);
                 }
-                peer* p_from_packet = peer_from_packet(p);
-                if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                peer *p_from_packet = peer_from_packet(p);
+                if (strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
                     succ = p_from_packet;
                 }
             } else if (p->flags & PKT_FLAG_STAB) {
                 if (pred == NULL) {
-                    peer* p_from_packet = peer_from_packet(p);
-                    if(strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                    peer *p_from_packet = peer_from_packet(p);
+                    if (strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
                         pred = p_from_packet;
                     }
                 } else if (p->node_id != pred->node_id) {
@@ -452,11 +504,21 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     peer_free(node);
                 }
                 // else do nothing. everything is ok
+            } else if (p->flags & PKT_FLAG_FNGR) { // initialize finger table
+                if(self->node_id){
+                    // Clear old fingertable and free memory
+                    ft_clear_fingertable(ftable, ft_len);
+
+                    // Update entries
+                    ftset = ft_update_entries(ftable, ft_len, self);
+
+                    // Send acknowledgment
+                    if(ftset){
+                        answer_fingertable_init(p, self);
+                    }
+                }
             }
         }
-
-        // TODO: Finger Tables ...
-
     }
     return CB_REMOVE_CLIENT;
 }
