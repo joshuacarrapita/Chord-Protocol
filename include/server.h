@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <sys/socket.h>
+#include <time.h>
 
 #include "packet.h"
 #include "util.h"

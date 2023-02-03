@@ -16,6 +16,7 @@ peer *peer_init(uint16_t id, const char *hostname, const char *port) {
     p->node_id = id;
     p->hostname = strdup(hostname);
 
+    errno = 0;
     long int tmp = strtol(port, NULL, 10);
     if (errno != EXIT_SUCCESS || tmp > UINT16_MAX) {
         fprintf(stderr, "Unable to convert string to port number!\n");

@@ -11,6 +11,8 @@
 
 #include "packet.h"
 
+time_t time_last_stabilize;
+
 void server_close_socket(server *srv, int socket) {
     for (client *c = srv->clients; c != NULL; c = c->next) {
         if (c->socket == socket) {
@@ -125,7 +127,7 @@ void server_run(server *srv) {
     srv->active = true;
     fprintf(stderr, "Starting server. Press any key to exit.\n");
 
-    // TODO: send msg to handle_packet_ctrl() to start JOIN process
+    // send msg to handle_packet_ctrl() to start JOIN process
     if (srv->packet_cb != NULL) {
         client* c = NULL;
         packet *rsp = packet_new();
@@ -133,6 +135,8 @@ void server_run(server *srv) {
         srv->packet_cb(srv, c, rsp);
         free(rsp);
     }
+
+    time_last_stabilize = time(NULL);
 
     struct pollfd *fds = NULL;
     int i, ready;
@@ -153,26 +157,25 @@ void server_run(server *srv) {
             fds[i].events = POLLIN;
         }
 
-        ready = poll(fds, srv->n_clients + 2, 1900);
+        ready = poll(fds, srv->n_clients + 2, 2000);
         if (ready < 0) {
             perror("Poll:");
             break;
         }
 
-        if (srv->packet_cb != NULL) {
+        // send msg to handle_packet_ctrl() to start STABILIZE process in 2 second interval
+        if (srv->packet_cb != NULL && time(NULL) - time_last_stabilize >= 2) {
             packet *rsp = packet_new();
             rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_STAB | PKT_FLAG_NTFY;
             srv->packet_cb(srv, c, rsp);
             free(rsp);
+            time_last_stabilize = time(NULL);
         }
 
         if (ready > 0) {
             if (fds[0].revents == POLLIN) {
                 break;
             }
-
-            // TODO: send msg to handle_packet_ctrl() to start JOIN process
-            // TODO: where exactly? send msg to handle_packet_ctrl() to start STABILIZE process in 2 second interval
 
             client *next;
             for (i = 2, c = srv->clients;

@@ -43,8 +43,10 @@ void ft_clear_fingertable(ftentry* fngrtable, int fngrtable_len){
  * @param entry The fingertable entry that's to be freed
  */
 void ftentry_free(ftentry entry){
-    peer_free(entry.successor);
-    entry.successor = NULL;
+    if(entry.successor != NULL) {
+        peer_free(entry.successor);
+        entry.successor = NULL;
+    }
 }
 
 /**
