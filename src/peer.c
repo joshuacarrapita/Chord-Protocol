@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <math.h>
 
 #include "hash_table.h"
 #include "neighbour.h"
@@ -27,6 +28,8 @@ char *portPeer = NULL;
 packet* ftlkppeer = NULL;
 ftentry ftable [ft_len];
 bool ftset = false;
+
+packet** ftpeer = NULL;
 
 /**
  * @brief Forward a packet to a peer.
@@ -215,15 +218,7 @@ int answer_lookup(packet *p, peer *n) {
  * @param p The answering peer
  * @return int The callback status
  */
-void answer_fingertable_init(packet* pack, peer *p){
-    peer* node = peer_from_packet(pack);
-
-    // check whether we can connect to the peer
-    if (peer_connect(node) != 0) {
-        fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
-                node->hostname, node->port);
-        peer_free(node);
-    }
+void answer_fingertable_init(int csocket, peer *p){
 
     // build a new packet for the response
     packet *rsp = packet_new();
@@ -236,11 +231,65 @@ void answer_fingertable_init(packet* pack, peer *p){
     size_t data_len;
     unsigned char *raw = packet_serialize(rsp, &data_len);
     free(rsp);
-    sendall(node->socket, raw, data_len);
+    sendall(csocket, raw, data_len);
     free(raw);
     raw = NULL;
-    peer_disconnect(node);
-    peer_free(node);
+}
+
+
+/**
+ *
+ * @param fngrtable The fingertable to be initialised or updated
+ * @param fngrtable_len  The length of said fingertable
+ * @param s The peer to receive info about responsible peers from, usually self
+ * @return true if the fingertable was initialised sucessfully, otherwise false
+ */
+bool ft_update_entries(ftentry *fngrtable, int fngrtable_len) {
+    for (int i = 0; i < fngrtable_len; i++) {
+        ftentry new_entry;
+
+        // calculate start value
+        new_entry.start = (int) (self->node_id + pow(2, i)) % (int) pow(2, fngrtable_len);
+
+        if(peer_is_responsible(pred->node_id, self->node_id, new_entry.start) || peer_is_responsible(self->node_id, succ->node_id, new_entry.start)) {
+            new_entry.successor = NULL; // once there is a result save it as the successor
+
+            fngrtable[i] = new_entry; // all done, add entry to fingertable!
+        }
+        else {
+
+            if (*ftpeer != NULL) {
+                packet_free(*ftpeer);
+                *ftpeer = NULL;
+            }
+
+            // find successor for given start value
+            lookup_peer(new_entry.start); // look up responsible peer for hash ID 'new_entry.start'
+            /*
+            time_t start = time(NULL);
+
+            while (*ftpeer == NULL && time(NULL) - start <= 5) {
+                sleep(1);
+            }*/
+
+            sleep(2);
+
+            if (*ftpeer == NULL) {
+                fprintf(stderr, "Fingertable init failed. Did not receive responsible peer info.");
+                return false;
+            }
+
+            new_entry.successor = peer_from_packet(*ftpeer); // once there is a result save it as the successor
+
+            fngrtable[i] = new_entry; // all done, add entry to fingertable!
+
+            if (*ftpeer != NULL) {
+                packet_free(*ftpeer);
+                *ftpeer = NULL;
+            }
+        }
+    }
+    return true;
 }
 
 /**
@@ -313,9 +362,15 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
          * First forward reply to self in case it was for a fingertable initialisation (could add a case distinction here
          * if bugs are caused due to request proxying even though we only wanted fingertable init)
          */
-        forward(self, p);
+
+        if(*ftpeer != NULL) {
+            packet_free(*ftpeer);
+            *ftpeer = NULL;
+        }
+        *ftpeer = packet_dup(p);
 
         peer *n = peer_from_packet(p);
+
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
              r = r->next) {
             proxy_request(srv, r->socket, r->packet, n);
@@ -510,11 +565,11 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     ft_clear_fingertable(ftable, ft_len);
 
                     // Update entries
-                    ftset = ft_update_entries(ftable, ft_len, self);
+                    ftset = ft_update_entries(ftable, ft_len);
 
                     // Send acknowledgment
                     if(ftset){
-                        answer_fingertable_init(p, self);
+                        answer_fingertable_init(c->socket, self);
                     }
                 }
             }
@@ -610,6 +665,9 @@ int main(int argc, char **argv) {
     rt = (rtable **)malloc(sizeof(rtable *));
     *ht = NULL;
     *rt = NULL;
+
+    ftpeer = (packet **)malloc(sizeof (packet *));
+    *ftpeer = NULL;
 
     srv->packet_cb = handle_packet;
     server_run(srv);
