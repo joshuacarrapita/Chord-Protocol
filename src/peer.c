@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <math.h>
+#include <pthread.h>
 
 #include "hash_table.h"
 #include "neighbour.h"
@@ -29,7 +30,10 @@ packet* ftlkppeer = NULL;
 ftentry ftable [ft_len];
 bool ftset = false;
 
-packet** ftpeer = NULL;
+packet* ftpeer = NULL;
+
+pthread_mutex_t ftpeer_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t ftpeer_cond = PTHREAD_COND_INITIALIZER;
 
 /**
  * @brief Forward a packet to a peer.
@@ -222,10 +226,7 @@ void answer_fingertable_init(int csocket, peer *p){
 
     // build a new packet for the response
     packet *rsp = packet_new();
-    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
-    rsp->node_id = p->node_id;
-    rsp->node_port = p->port;
-    rsp->node_ip = peer_get_ip(p);
+    rsp->flags = PKT_FLAG_FACK;
 
     // send response
     size_t data_len;
@@ -258,38 +259,43 @@ bool ft_update_entries(ftentry *fngrtable, int fngrtable_len) {
         }
         else {
 
-            if (*ftpeer != NULL) {
-                packet_free(*ftpeer);
-                *ftpeer = NULL;
+            if (ftpeer != NULL) {
+                packet_free(ftpeer);
+                ftpeer = NULL;
             }
 
             // find successor for given start value
             lookup_peer(new_entry.start); // look up responsible peer for hash ID 'new_entry.start'
-            /*
-            time_t start = time(NULL);
 
-            while (*ftpeer == NULL && time(NULL) - start <= 5) {
-                sleep(1);
-            }*/
-
-            sleep(2);
-
-            if (*ftpeer == NULL) {
-                fprintf(stderr, "Fingertable init failed. Did not receive responsible peer info.");
-                return false;
+            pthread_mutex_lock(&ftpeer_mutex);
+            while (ftpeer == NULL) {
+                pthread_cond_wait(&ftpeer_cond, &ftpeer_mutex);
             }
+            pthread_mutex_unlock(&ftpeer_mutex);
 
-            new_entry.successor = peer_from_packet(*ftpeer); // once there is a result save it as the successor
+            new_entry.successor = peer_from_packet(ftpeer); // once there is a result save it as the successor
 
             fngrtable[i] = new_entry; // all done, add entry to fingertable!
 
-            if (*ftpeer != NULL) {
-                packet_free(*ftpeer);
-                *ftpeer = NULL;
+            if (ftpeer != NULL) {
+                packet_free(ftpeer);
+                ftpeer = NULL;
             }
         }
     }
     return true;
+}
+
+
+// Thread function for ft_update_entries
+void *ft_update_entries_thread(void *arg) {
+    ftentry *fngrtable = (ftentry *)arg;
+    int fngrtable_len = ft_len;
+
+    ft_update_entries(fngrtable, fngrtable_len);
+
+    // Exit the thread
+    pthread_exit(NULL);
 }
 
 /**
@@ -363,12 +369,14 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
          * if bugs are caused due to request proxying even though we only wanted fingertable init)
          */
 
-        if(*ftpeer != NULL) {
-            packet_free(*ftpeer);
-            *ftpeer = NULL;
+        pthread_mutex_lock(&ftpeer_mutex);
+        if(ftpeer != NULL) {
+            packet_free(ftpeer);
+            ftpeer = NULL;
         }
-        *ftpeer = packet_dup(p);
-
+        ftpeer = packet_dup(p);
+        pthread_cond_signal(&ftpeer_cond);
+        pthread_mutex_unlock(&ftpeer_mutex);
         peer *n = peer_from_packet(p);
 
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
@@ -475,7 +483,6 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     sendall(new_node->socket, raw, data_len);
                     free(raw);
                     raw = NULL;
-                    peer_disconnect(new_node);
                 } else if (pred != NULL && peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
                     // current peer is successor of new peer: updates its own predecessor
                     // and answers with a Notify and its own data
@@ -560,17 +567,21 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 }
                 // else do nothing. everything is ok
             } else if (p->flags & PKT_FLAG_FNGR) { // initialize finger table
-                if(self->node_id){
+                if (self->node_id) {
                     // Clear old fingertable and free memory
                     ft_clear_fingertable(ftable, ft_len);
 
-                    // Update entries
-                    ftset = ft_update_entries(ftable, ft_len);
+                    // Create the thread for ft_update_entries
+                    pthread_t thread;
+                    int result = pthread_create(&thread, NULL, ft_update_entries_thread, (void *)ftable);
 
-                    // Send acknowledgment
-                    if(ftset){
-                        answer_fingertable_init(c->socket, self);
+                    // Check if thread creation was successful
+                    if (result != 0) {
+                        fprintf(stderr, "Error: Failed to create thread\n");
                     }
+                    pthread_detach(thread);
+
+                    answer_fingertable_init(c->socket, self);
                 }
             }
         }
@@ -650,8 +661,8 @@ int main(int argc, char **argv) {
 
     // Initialize all chord peers
     self = peer_init(
-        idSelf, hostSelf,
-        portSelf); //  Not really necessary but convenient to store us as a peer
+            idSelf, hostSelf,
+            portSelf); //  Not really necessary but convenient to store us as a peer
 
     // Initialize outer server for communication with clients
     server *srv = server_setup(portSelf);
@@ -666,8 +677,7 @@ int main(int argc, char **argv) {
     *ht = NULL;
     *rt = NULL;
 
-    ftpeer = (packet **)malloc(sizeof (packet *));
-    *ftpeer = NULL;
+    ftpeer = NULL;
 
     srv->packet_cb = handle_packet;
     server_run(srv);
