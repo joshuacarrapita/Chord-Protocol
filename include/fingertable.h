@@ -1,8 +1,5 @@
 #pragma once
 
-#include <time.h>
-#include <unistd.h>
-
 #include "neighbour.h"
 
 #define ft_len 16
