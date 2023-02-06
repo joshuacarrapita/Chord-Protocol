@@ -15,5 +15,9 @@ void ft_clear_fingertable(ftentry* fngrtable, int fngrtable_len);
 
 void ftentry_free(ftentry entry);
 
-bool ft_update_entries(ftentry* fngrtable, int fngrtable_len, peer* s);
+void ft_update_entries(ftentry* fngrtable, int fngrtable_len, peer* s);
+
+bool ft_is_set(ftentry* fngrtable, int fngrtable_len);
+
+void ft_set_successor(ftentry* fngrtable, int fngrtable_len, packet* s);
 

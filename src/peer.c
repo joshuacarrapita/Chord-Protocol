@@ -27,6 +27,7 @@ char *portPeer = NULL;
 packet* ftlkppeer = NULL;
 ftentry ftable [ft_len];
 bool ftset = false;
+bool ftinit = false;
 
 /**
  * @brief Forward a packet to a peer.
@@ -307,14 +308,13 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
     } else if (p->flags & PKT_FLAG_RPLY) {
         fprintf(stderr, "Handling control packet...\n");
 
+        // Set successor on fingertable if necessary
+        if(ftinit && !ftset){
+            ft_set_successor(ftable, ft_len, p);
+            ftset = ft_is_set(ftable, ft_len);
+        }
+
         // Look for open requests and proxy them
-
-        /*
-         * First forward reply to self in case it was for a fingertable initialisation (could add a case distinction here
-         * if bugs are caused due to request proxying even though we only wanted fingertable init)
-         */
-        forward(self, p);
-
         peer *n = peer_from_packet(p);
         for (request *r = get_requests(rt, p->hash_id); r != NULL;
              r = r->next) {
@@ -505,17 +505,19 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 }
                 // else do nothing. everything is ok
             } else if (p->flags & PKT_FLAG_FNGR) { // initialize finger table
+                ftinit = false;
+                ftset = false;
                 if(self->node_id){
                     // Clear old fingertable and free memory
                     ft_clear_fingertable(ftable, ft_len);
 
                     // Update entries
-                    ftset = ft_update_entries(ftable, ft_len, self);
+                    ft_update_entries(ftable, ft_len, self);
 
                     // Send acknowledgment
-                    if(ftset){
-                        answer_fingertable_init(p, self);
-                    }
+                    answer_fingertable_init(p, self);
+
+                    ftinit = true;
                 }
             }
         }
