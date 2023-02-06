@@ -208,27 +208,7 @@ int answer_lookup(packet *p, peer *n) {
     return CB_REMOVE_CLIENT;
 }
 
-/**
- * @brief Answer a fingertable initialisation request with an acknowledgement.
- *
- * @param pack The packet containing info about the peer to reply to
- * @param p The answering peer
- * @return int The callback status
- */
-void answer_fingertable_init(int csocket, peer *p){
 
-    // build a new packet for the response
-    packet *rsp = packet_new();
-    rsp->flags = PKT_FLAG_FACK;
-
-    // send response
-    size_t data_len;
-    unsigned char *raw = packet_serialize(rsp, &data_len);
-    free(rsp);
-    sendall(csocket, raw, data_len);
-    free(raw);
-    raw = NULL;
-}
 
 /**
  * @brief Handle a key request request from a client.
@@ -501,7 +481,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     ft_update_entries(ftable, ft_len, self);
 
                     // Send acknowledgment
-                    answer_fingertable_init(p, self);
+                    answer_fingertable_init(c->socket);
 
                     ftinit = true;
                 }

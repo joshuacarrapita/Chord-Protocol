@@ -21,3 +21,4 @@ bool ft_is_set(ftentry* fngrtable, int fngrtable_len);
 
 void ft_set_successor(ftentry* fngrtable, int fngrtable_len, packet* s);
 
+void answer_fingertable_init(int csocket);

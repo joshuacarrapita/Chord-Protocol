@@ -98,3 +98,24 @@ void ft_set_successor(ftentry* fngrtable, int fngrtable_len, packet* s){
         }
     }
 }
+
+/**
+ * @brief Answer a fingertable initialisation request with an acknowledgement
+ *
+ * @param csocket The socket of the client to send acknowledgement to
+ * @return int The callback status
+ */
+void answer_fingertable_init(int csocket){
+
+    // build a new packet for the response
+    packet *rsp = packet_new();
+    rsp->flags = PKT_FLAG_FACK;
+
+    // send response
+    size_t data_len;
+    unsigned char *raw = packet_serialize(rsp, &data_len);
+    free(rsp);
+    sendall(csocket, raw, data_len);
+    free(raw);
+    raw = NULL;
+}
