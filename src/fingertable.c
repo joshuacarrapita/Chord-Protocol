@@ -109,7 +109,7 @@ void answer_fingertable_init(int csocket){
 
     // build a new packet for the response
     packet *rsp = packet_new();
-    rsp->flags = PKT_FLAG_FACK;
+    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
 
     // send response
     size_t data_len;

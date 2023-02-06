@@ -163,7 +163,7 @@ int handle_own_request(server* srv, client *c, packet *p) {
 
     size_t data_len;
     unsigned char *raw = packet_serialize(rsp, &data_len);
-    free(rsp);
+    packet_free(rsp);
     sendall(c->socket, raw, data_len);
     free(raw);
     raw = NULL;
@@ -199,7 +199,7 @@ int answer_lookup(packet *p, peer *n) {
 
     size_t data_len;
     unsigned char *raw = packet_serialize(rsp, &data_len);
-    free(rsp);
+    packet_free(rsp);
     sendall(questioner->socket, raw, data_len);
     free(raw);
     raw = NULL;
@@ -207,8 +207,6 @@ int answer_lookup(packet *p, peer *n) {
     peer_free(questioner);
     return CB_REMOVE_CLIENT;
 }
-
-
 
 /**
  * @brief Handle a key request request from a client.
@@ -320,7 +318,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
                 size_t data_len;
                 unsigned char *raw = packet_serialize(rsp, &data_len);
-                free(rsp);
+                packet_free(rsp);
                 sendall(node->socket, raw, data_len);
                 free(raw);
                 raw = NULL;
@@ -347,11 +345,27 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
                 size_t data_len;
                 unsigned char *raw = packet_serialize(rsp, &data_len);
-                free(rsp);
+                packet_free(rsp);
                 sendall(succ->socket, raw, data_len);
                 free(raw);
                 raw = NULL;
-                peer_disconnect(succ);
+
+                client *new_client = (client *)malloc(sizeof(client));
+                new_client->socket = succ->socket;
+                new_client->addr = succ->addr;
+                new_client->addr_len = succ->addr_len;
+
+                new_client->state = IDLE;
+                new_client->header_buf = rb_new(PKT_HEADER_LEN);
+                new_client->pkt_buf = NULL;
+                new_client->pack = NULL;
+
+                // Append to front
+                new_client->next = srv->clients;
+                srv->clients = new_client;
+                srv->n_clients++;
+
+               // return CB_OK;
             }
         } else {
             fprintf(stderr, "Handling control packet...\n");
@@ -359,17 +373,18 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             // Normal incoming CTRL Packages
             if (p->flags & PKT_FLAG_JOIN) {
                 if (pred == NULL && succ == NULL) {
-                    peer *new_node = peer_from_packet(p);
+                    peer *connection = peer_from_packet(p);
+                    peer *new_node1 = peer_from_packet(p);
                     peer *new_node2 = peer_from_packet(p);
 
-                    succ = new_node;
+                    succ = new_node1;
                     pred = new_node2;
 
                     // check whether we can connect to the peer
-                    if (peer_connect(new_node) != 0) {
+                    if (peer_connect(connection) != 0) {
                         fprintf(stderr, "Could not connect to questioner of join at %s:%d\n!",
-                                new_node->hostname, new_node->port);
-                        peer_free(new_node);
+                                connection->hostname, connection->port);
+                        peer_free(connection);
                         return CB_REMOVE_CLIENT;
                     }
 
@@ -382,22 +397,24 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
                     size_t data_len;
                     unsigned char *raw = packet_serialize(rsp, &data_len);
-                    free(rsp);
-                    sendall(new_node->socket, raw, data_len);
+                    packet_free(rsp);
+                    sendall(connection->socket, raw, data_len);
                     free(raw);
                     raw = NULL;
-                    peer_disconnect(new_node);
-                } else if (pred != NULL && peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
+                    peer_disconnect(connection);
+                    peer_free(connection);
+                } else if (peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
                     // current peer is successor of new peer: updates its own predecessor
                     // and answers with a Notify and its own data
 
-                    peer *new_node = peer_from_packet(p);
+                    peer *connection = peer_from_packet(p);
+                    peer *new_node1 = peer_from_packet(p);
 
                     // check whether we can connect to the peer
-                    if (peer_connect(new_node) != 0) {
+                    if (peer_connect(connection) != 0) {
                         fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
-                                new_node->hostname, new_node->port);
-                        peer_free(new_node);
+                                connection->hostname, connection->port);
+                        peer_free(connection);
                         return CB_REMOVE_CLIENT;
                     }
 
@@ -405,7 +422,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     if (pred != NULL) {
                         peer_free(pred);
                     }
-                    pred = new_node;
+                    pred = new_node1;
 
                     // build a new packet for the response including own id ip port
                     packet *rsp = packet_new();
@@ -416,34 +433,35 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
                     size_t data_len;
                     unsigned char *raw = packet_serialize(rsp, &data_len);
-                    free(rsp);
-                    sendall(new_node->socket, raw, data_len);
+                    packet_free(rsp);
+                    sendall(connection->socket, raw, data_len);
                     free(raw);
                     raw = NULL;
-                    peer_disconnect(new_node);
+                    peer_disconnect(connection);
+                    peer_free(connection);
                 } else {
                     // current peer not responsible -> forward to next
                     forward(succ, p);
                 }
             } else if (p->flags & PKT_FLAG_NTFY) {
                 // set successor to peer in packet
-                if (succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
-                    peer_free(succ);
-                }
                 peer *p_from_packet = peer_from_packet(p);
-                if (strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                if (p_from_packet->node_id != self->node_id || p_from_packet->port != self->port) { // TODO: Port Vergleich entfernen?
+                    if (succ != NULL) { // this check has to be done because succ is NULL for joining node in the beginning
+                        peer_free(succ);
+                    }
                     succ = p_from_packet;
                 }
             } else if (p->flags & PKT_FLAG_STAB) {
                 if (pred == NULL) {
                     peer *p_from_packet = peer_from_packet(p);
-                    if (strcmp(p_from_packet->hostname, self->hostname) != 0 || p_from_packet->port != self->port) {
+                    if (p_from_packet->node_id != self->node_id || p_from_packet->port != self->port) {
                         pred = p_from_packet;
                     }
                 } else if (p->node_id != pred->node_id) {
                     // current peer is not successor of origin anymore and sends new successor back
 
-                    peer *node = peer_from_packet(p);
+                    /*peer *node = peer_from_packet(p);
 
                     // check whether we can connect to the peer
                     if (peer_connect(node) != 0) {
@@ -451,7 +469,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                                 node->hostname, node->port);
                         peer_free(node);
                         return CB_REMOVE_CLIENT;
-                    }
+                    }*/
 
                     // build a new packet for the response including id ip port of predecessor
                     packet *rsp = packet_new();
@@ -462,12 +480,12 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
                     size_t data_len;
                     unsigned char *raw = packet_serialize(rsp, &data_len);
-                    free(rsp);
-                    sendall(node->socket, raw, data_len);
+                    packet_free(rsp);
+                    sendall(c->socket, raw, data_len);
                     free(raw);
                     raw = NULL;
-                    peer_disconnect(node);
-                    peer_free(node);
+                    //peer_disconnect(node);
+                    //peer_free(node);
                 }
                 // else do nothing. everything is ok
             } else if (p->flags & PKT_FLAG_FNGR) { // initialize finger table
