@@ -24,7 +24,6 @@ char *hostPeer = NULL;
 char *portPeer = NULL;
 
 // fingertable
-packet* ftlkppeer = NULL;
 ftentry ftable [ft_len];
 bool ftset = false;
 bool ftinit = false;
@@ -216,32 +215,19 @@ int answer_lookup(packet *p, peer *n) {
  * @param p The answering peer
  * @return int The callback status
  */
-void answer_fingertable_init(packet* pack, peer *p){
-    peer* node = peer_from_packet(pack);
-
-    // check whether we can connect to the peer
-    if (peer_connect(node) != 0) {
-        fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
-                node->hostname, node->port);
-        peer_free(node);
-    }
+void answer_fingertable_init(int csocket, peer *p){
 
     // build a new packet for the response
     packet *rsp = packet_new();
-    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
-    rsp->node_id = p->node_id;
-    rsp->node_port = p->port;
-    rsp->node_ip = peer_get_ip(p);
+    rsp->flags = PKT_FLAG_FACK;
 
     // send response
     size_t data_len;
     unsigned char *raw = packet_serialize(rsp, &data_len);
     free(rsp);
-    sendall(node->socket, raw, data_len);
+    sendall(csocket, raw, data_len);
     free(raw);
     raw = NULL;
-    peer_disconnect(node);
-    peer_free(node);
 }
 
 /**

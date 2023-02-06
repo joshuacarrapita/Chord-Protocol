@@ -135,6 +135,7 @@ packet *packet_decode_hdr(const unsigned char *buffer, size_t buf_len) {
         fprintf(stderr, "\tGET: %d\n", (p->flags >> PKT_FLAG_GET_POS) & 1);
         fprintf(stderr, "\tSET: %d\n", (p->flags >> PKT_FLAG_SET_POS) & 1);
         fprintf(stderr, "\tDEL: %d\n", (p->flags >> PKT_FLAG_DEL_POS) & 1);
+        fprintf(stderr, "\tFNGR: %d\n", (p->flags >> PKT_FLAG_FNGR_POS) & 1);
         fprintf(stderr, "\tKey Length: %d Bytes\n", p->key_len);
         fprintf(stderr, "\tValue Length: %d Bytes\n", p->value_len);
     } else {

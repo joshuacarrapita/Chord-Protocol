@@ -172,6 +172,14 @@ int main(int argc, char **argv) {
         packet_free(p);
         sendall(s, raw_pkt, raw_size);
 
+    } else if (strcmp(method, "FNGR") == 0) {
+        // Finger command
+        p->flags = PKT_FLAG_CTRL | PKT_FLAG_FNGR;
+
+        size_t raw_size;
+        unsigned char *raw_pkt = packet_serialize(p, &raw_size);
+        packet_free(p);
+        sendall(s, raw_pkt, raw_size);
     } else {
         fprintf(stderr, "Unknown method %s!\n", method);
         packet_free(p);
@@ -189,6 +197,9 @@ int main(int argc, char **argv) {
 
     if (!(rsp->flags & PKT_FLAG_ACK)) {
         fprintf(stderr, "Server did not acknowledge operation!\n");
+        return -1;
+    } else if (!(rsp->flags & PKT_FLAG_FACK)) {
+        fprintf(stderr, "Server did not Finger acknowledge operation!\n");
         return -1;
     }
 
