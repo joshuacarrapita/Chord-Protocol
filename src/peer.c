@@ -28,6 +28,8 @@ ftentry ftable [ft_len];
 bool ftset = false;
 bool ftinit = false;
 
+#define debug 1
+
 /**
  * @brief Forward a packet to a peer.
  *
@@ -303,7 +305,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
                 // check whether we can connect to the peer
                 if (peer_connect(node) != 0) {
-                    fprintf(stderr, "Could not connect to peer of lookup at %s:%d\n!",
+                    fprintf(stderr, "Could not connect to peer of JOIN&NTFY at %s:%d\n!",
                             node->hostname, node->port);
                     peer_free(node);
                     return CB_REMOVE_CLIENT;
@@ -329,9 +331,10 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             // Send Stabilize Msg to successor
         else if (p->flags & PKT_FLAG_STAB && p->flags & PKT_FLAG_NTFY) {
             if (succ != NULL) {
+                if (debug) fprintf(stderr, "Entering STAB&NTFY. 'succ' is %d with %s:%d and sock %d. 'self' is %d with %s:%d and sock %d.\n", succ->node_id, succ->hostname, succ->port, succ->socket, self->node_id, self->hostname, self->port, self->socket);
                 // check whether we can connect to the peer
                 if (peer_connect(succ) != 0) {
-                    fprintf(stderr, "Could not connect to peer of lookup at %s:%d\n!",
+                    fprintf(stderr, "Could not connect to peer of STAB&NTFY at %s:%d\n!",
                             succ->hostname, succ->port);
                     return CB_REMOVE_CLIENT;
                 }
@@ -364,8 +367,6 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 new_client->next = srv->clients;
                 srv->clients = new_client;
                 srv->n_clients++;
-
-               // return CB_OK;
             }
         } else {
             fprintf(stderr, "Handling control packet...\n");
@@ -496,7 +497,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     ft_clear_fingertable(ftable, ft_len);
 
                     // Update entries
-                    ft_update_entries(ftable, ft_len, self);
+                    ft_update_entries(ftable, ft_len, pred, self, succ);
 
                     // Send acknowledgment
                     answer_fingertable_init(c->socket);

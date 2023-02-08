@@ -165,9 +165,10 @@ void server_run(server *srv) {
 
         // send msg to handle_packet_ctrl() to start STABILIZE process in 2 second interval
         if (srv->packet_cb != NULL && time(NULL) - time_last_stabilize >= 2) {
+            client* cl = NULL;
             packet *rsp = packet_new();
             rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_STAB | PKT_FLAG_NTFY;
-            srv->packet_cb(srv, c, rsp);
+            srv->packet_cb(srv, cl, rsp);
             free(rsp);
             time_last_stabilize = time(NULL);
         }

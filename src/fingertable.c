@@ -57,13 +57,22 @@ void ftentry_free(ftentry entry){
  * @param s Self
  * @return true if the fingertable was initialised sucessfully, otherwise false
  */
-void ft_update_entries(ftentry* fngrtable, int fngrtable_len, peer* s){
+void ft_update_entries(ftentry* fngrtable, int fngrtable_len, peer* p, peer* s, peer* sc){
     for(int i = 0; i < fngrtable_len; i++){
             // calculate start value
             fngrtable[i].start = (int)(s->node_id + pow(2, i)) % (int) pow(2, fngrtable_len);
 
             // find successor for given start value
-            lookup_peer(fngrtable[i].start); // look up responsible peer for hash ID 'new_entry.start'
+            if(!p || !sc) {
+                fprintf(stderr, "pred was %p and succ was %p during fingertable init.\n",(void*) p, (void*) sc);
+                fngrtable[i].successor = NULL;}
+            else {
+                if(peer_is_responsible(p->node_id, s->node_id,fngrtable[i].start)
+                || peer_is_responsible(s->node_id, sc->node_id, fngrtable[i].start)) {fngrtable[i].successor = NULL;}
+                else {
+                    lookup_peer(fngrtable[i].start); // look up responsible peer for hash ID 'new_entry.start'
+                }
+            }
     }
 }
 
