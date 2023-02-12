@@ -28,7 +28,7 @@ ftentry ftable [ft_len];
 bool ftset = false;
 bool ftinit = false;
 
-#define debug 1
+#define debug 0
 
 /**
  * @brief Forward a packet to a peer.
@@ -454,8 +454,8 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     raw = NULL;
                     peer_disconnect(connection);
                     peer_free(connection);
-                } else {
-                    // current peer not responsible -> forward to next
+                } else if (peer_is_responsible(self->node_id, succ->node_id, p->node_id)) {
+                    // successor is responsible -> forward
                     if(debug) {
                         fprintf(stderr, "I (%d; %s; %d; %d) am not responsible for joining node, "
                                               "(%d; %d; %d) forwarding to successor (%d; %s; %d; %d).",
@@ -464,6 +464,12 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                                               succ->node_id, succ->hostname, succ->port, succ->socket);
                     }
                     forward(succ, p);
+                } else {
+                   if(ftset){
+                       ft_forward_closest_pred(ftable,ft_len,p);
+                   } else {
+                       forward(succ,p);
+                   }
                 }
             } else if (p->flags & PKT_FLAG_NTFY) {
                 // set successor to peer in packet
