@@ -378,13 +378,13 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
 
             // Normal incoming CTRL Packages
             if (p->flags & PKT_FLAG_JOIN) {
-                if (pred == NULL && succ == NULL) {
+                if (pred == NULL || succ == NULL) {
                     peer *connection = peer_from_packet(p);
                     peer *new_node1 = peer_from_packet(p);
                     peer *new_node2 = peer_from_packet(p);
 
-                    succ = new_node1;
-                    pred = new_node2;
+                    if (!succ) succ = new_node1;
+                    if (!pred) pred = new_node2;
 
                     // check whether we can connect to the peer
                     if (peer_connect(connection) != 0) {
