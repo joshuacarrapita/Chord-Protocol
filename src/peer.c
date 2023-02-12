@@ -38,6 +38,11 @@ bool ftinit = false;
  * @return int The status of the sending procedure
  */
 int forward(peer *p, packet *pack) {
+    if (debug) {
+        fprintf(stderr, "Forwarding packet: (%d; %d; %d) to (%d; %s; %d; %d).",
+                pack->node_id, pack->node_ip, pack->node_port,
+                p->node_id, succ->hostname, succ->port, succ->socket);
+    }
     // check whether we can connect to the peer
     if (peer_connect(p) != 0) {
         fprintf(stderr, "Failed to connect to peer %s:%d\n", p->hostname,
@@ -331,7 +336,7 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
             // Send Stabilize Msg to successor
         else if (p->flags & PKT_FLAG_STAB && p->flags & PKT_FLAG_NTFY) {
             if (succ != NULL) {
-                if (debug) fprintf(stderr, "Entering STAB&NTFY. 'succ' is %d with %s:%d and sock %d. 'self' is %d with %s:%d and sock %d.\n", succ->node_id, succ->hostname, succ->port, succ->socket, self->node_id, self->hostname, self->port, self->socket);
+                if (debug) fprintf(stderr, "Entering STAB&NTFY. \'succ\' is %d with %s:%d and sock %d. \'self\' is %d with %s:%d and sock %d.\n", succ->node_id, succ->hostname, succ->port, succ->socket, self->node_id, self->hostname, self->port, self->socket);
                 // check whether we can connect to the peer
                 if (peer_connect(succ) != 0) {
                     fprintf(stderr, "Could not connect to peer of STAB&NTFY at %s:%d\n!",
@@ -407,10 +412,19 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                 } else if (peer_is_responsible(pred->node_id, self->node_id, p->node_id)) {
                     // current peer is successor of new peer: updates its own predecessor
                     // and answers with a Notify and its own data
+                    if(debug) {
+                        fprintf(stderr, "I (%d; %s; %d; %d) am responsible for joining node (%d; %d; %d). Preparing JOIN...",
+                                self->node_id, self->hostname, self->port, self->socket,
+                                p->node_id, p->node_ip, p->node_port);
+                    }
 
                     peer *connection = peer_from_packet(p);
                     peer *new_node1 = peer_from_packet(p);
 
+                    if(debug) {
+                        fprintf(stderr, "Attempting connection to (%d; %s, %d; %d). Preparing JOIN...",
+                                connection->node_id, connection->hostname, connection->port, connection->socket);
+                    }
                     // check whether we can connect to the peer
                     if (peer_connect(connection) != 0) {
                         fprintf(stderr, "Could not connect to questioner of lookup at %s:%d\n!",
@@ -442,6 +456,13 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     peer_free(connection);
                 } else {
                     // current peer not responsible -> forward to next
+                    if(debug) {
+                        fprintf(stderr, "I (%d; %s; %d; %d) am not responsible for joining node, "
+                                              "(%d; %d; %d) forwarding to successor (%d; %s; %d; %d).",
+                                              self->node_id, self->hostname, self->port, self->socket,
+                                              p->node_id, p->node_ip, p->node_port,
+                                              succ->node_id, succ->hostname, succ->port, succ->socket);
+                    }
                     forward(succ, p);
                 }
             } else if (p->flags & PKT_FLAG_NTFY) {
@@ -459,7 +480,8 @@ int handle_packet_ctrl(server *srv, client *c, packet *p) {
                     if (p_from_packet->node_id != self->node_id || p_from_packet->port != self->port) {
                         pred = p_from_packet;
                     }
-                } else if (p->node_id != pred->node_id) {
+                }
+                if (pred != NULL) {
                     // current peer is not successor of origin anymore and sends new successor back
 
                     /*peer *node = peer_from_packet(p);
