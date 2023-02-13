@@ -50,33 +50,81 @@ void ftentry_free(ftentry entry){
 }
 
 /**
+ * @brief Initialises the fingertables start values and sends lookups for successors
  *
  * @param fngrtable The fingertable to be initialised or updated
  * @param fngrtable_len  The length of said fingertable
- * @param s The peer to receive info about responsible peers from, usually self
+ * @param s Self
  * @return true if the fingertable was initialised sucessfully, otherwise false
  */
-bool ft_update_entries(ftentry* fngrtable, int fngrtable_len, peer* s){
+void ft_update_entries(ftentry* fngrtable, int fngrtable_len, peer* p, peer* s, peer* sc){
     for(int i = 0; i < fngrtable_len; i++){
-            ftentry new_entry;
-
             // calculate start value
-            new_entry.start = (int)(s->node_id + pow(2, i)) % (int) pow(2, fngrtable_len);
+            fngrtable[i].start = (int)(s->node_id + pow(2, i)) % (int) pow(2, fngrtable_len);
 
             // find successor for given start value
-            lookup_peer(new_entry.start); // look up responsible peer for hash ID 'new_entry.start'
-
-            size_t rsp_len = 0;
-            unsigned char* rsp = recvall(s->socket, &rsp_len); // receive responsible peer info
-            packet* new_succ_pack = packet_decode(rsp, rsp_len);
-            if(!new_succ_pack){
-                fprintf(stderr, "Fingertable init failed. Did not receive responsible peer info.");
-                return false;
+            if(!p || !sc) {
+                fprintf(stderr, "pred was %p and succ was %p during fingertable init.\n",(void*) p, (void*) sc);
+                fngrtable[i].successor = NULL;}
+            else {
+                if(peer_is_responsible(p->node_id, s->node_id,fngrtable[i].start)
+                || peer_is_responsible(s->node_id, sc->node_id, fngrtable[i].start)) {fngrtable[i].successor = NULL;}
+                else {
+                    lookup_peer(fngrtable[i].start); // look up responsible peer for hash ID 'new_entry.start'
+                }
             }
+    }
+}
 
-            new_entry.successor = peer_from_packet(new_succ_pack); // once there is a result save it as the successor
-
-            fngrtable[i] = new_entry; // all done, add entry to fingertable!
+/**
+ * @brief Checks if there is a successor that is not yet set in the fingertable
+ *
+ * @param fngrtable The fingertable to check
+ * @param fngrtable_len The lenght of said fingertable
+ * @return true if all sucessors are set, else false
+ */
+bool ft_is_set(ftentry* fngrtable, int fngrtable_len){
+    for(int i = 0; i < fngrtable_len; i++){
+        if(!fngrtable[i].successor){
+            return false;
+        }
     }
     return true;
+}
+
+/**
+ * @brief Sets the sucessor to a given value if this value exists in the fingertable
+ *
+ * @param fngrtable The fingertable in which the successor should be set
+ * @param fngrtable_len The length of said fingertable
+ * @param s The packet containing the data about the value and the successor
+ */
+void ft_set_successor(ftentry* fngrtable, int fngrtable_len, packet* s){
+    for(int i = 0; i < fngrtable_len; i++){
+        if(fngrtable[i].start == s->hash_id){
+            fngrtable[i].successor = peer_from_packet(s);
+            return;
+        }
+    }
+}
+
+/**
+ * @brief Answer a fingertable initialisation request with an acknowledgement
+ *
+ * @param csocket The socket of the client to send acknowledgement to
+ * @return int The callback status
+ */
+void answer_fingertable_init(int csocket){
+
+    // build a new packet for the response
+    packet *rsp = packet_new();
+    rsp->flags = PKT_FLAG_CTRL | PKT_FLAG_FACK;
+
+    // send response
+    size_t data_len;
+    unsigned char *raw = packet_serialize(rsp, &data_len);
+    free(rsp);
+    sendall(csocket, raw, data_len);
+    free(raw);
+    raw = NULL;
 }
