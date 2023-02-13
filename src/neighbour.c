@@ -87,8 +87,10 @@ int peer_connect(peer *p) {
             continue;
         }
 
+        //fprintf(stderr, "Going to connect to %d, %s.", p->socket, res->ai_addr->sa_data);
         int status = connect(p->socket, res->ai_addr, res->ai_addrlen);
         if (status < 0) {
+            //fprintf(stderr, "Connect error.");
             perror("connect");
             continue;
         }
