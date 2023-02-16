@@ -91,6 +91,7 @@ int proxy_request(server *srv, int csocket, packet *p, peer *n) {
     sendall(csocket, rsp, rsp_len);
     free(rsp);
 
+    peer_disconnect(n);
     return CB_REMOVE_CLIENT;
 }
 
